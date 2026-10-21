@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterable
 from dataclasses import dataclass, field
@@ -131,7 +132,7 @@ DEFAULT_ITEM_FIELDS: tuple[str, ...] = (
     "FileRef",
     "FileDirRef",
     "FSObjType",
-    "File_x0020_Size",
+    "File/Length",
     "Created",
     "Modified",
     "Author/EMail",
@@ -476,6 +477,24 @@ async def get_library(client: _SpClientLike, site_url: str, name: str | None) ->
 # ---------------------------------------------------------------------------------------------------------------
 
 
+_MISSING_FIELD_RE = re.compile(
+    r"(?:field or property|veld of de eigenschap|column)\s+'?([A-Za-z0-9_]+)'?\s+(?:does not exist|bestaat niet|existiert nicht)",
+    re.IGNORECASE,
+)
+
+
+def _missing_field_from_error(message: str, select: Iterable[str]) -> str | None:
+    """Return the ``$select`` entry SharePoint rejected as non-existent, or None if the error is something else."""
+    m = _MISSING_FIELD_RE.search(message)
+    if not m:
+        return None
+    name = m.group(1)
+    for f in select:
+        if f == name or f.split("/", 1)[0] == name or f == f"OData_{name}":
+            return f
+    return None
+
+
 async def _iter_keyset(
     client: _SpClientLike,
     base: str,
@@ -488,15 +507,25 @@ async def _iter_keyset(
     ID is always indexed, so each page stays under the list view threshold regardless of library size, and a
     page that fails (throttling) can be retried from a known position.
     """
-    select_s = ",".join(select)
-    expand_s = ",".join(expand)
+    select = list(select)
+    expand = list(expand)
     last_id = 0
     while True:
-        params: dict[str, Any] = {"$select": select_s}
-        if expand_s:
-            params["$expand"] = expand_s
+        params: dict[str, Any] = {"$select": ",".join(select)}
+        if expand:
+            params["$expand"] = ",".join(expand)
         params.update({"$filter": f"ID gt {last_id}", "$orderby": "ID", "$top": page_size})
-        data = await client.get_json(_url(base, params))
+        try:
+            data = await client.get_json(_url(base, params))
+        except M365Error as exc:
+            # Tenants differ in which computed fields are exposed on /items (e.g. File_x0020_Size, ProgId).
+            # Drop the field SharePoint complains about and retry instead of failing the whole inventory.
+            bad = _missing_field_from_error(str(exc), select)
+            if bad is None:
+                raise
+            select = [f for f in select if f != bad]
+            expand = sorted({f.split("/", 1)[0] for f in select if "/" in f})
+            continue
         rows = _values(data)
         if not rows:
             return

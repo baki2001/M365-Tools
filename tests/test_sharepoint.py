@@ -116,7 +116,7 @@ async def test_iter_items_keyset_paging(fake_client, respx_mock: respx.MockRoute
     assert route.call_count == 2
     first = route.calls[0].request.url.params
     assert first["$orderby"] == "ID" and first["$top"] == "2"
-    assert first["$expand"] == "Author,CheckoutUser,Editor"
+    assert first["$expand"] == "Author,CheckoutUser,Editor,File"
     assert "Author/EMail" in first["$select"] and first["$select"].startswith("Id,")
     assert "+" not in raw(route.calls[0].request)  # spaces encoded as %20
 
@@ -408,3 +408,35 @@ async def test_search_sites_parses_rows(fake_client, respx_mock: respx.MockRoute
     hits = await sp.search_sites(fake_client, "Doc", root_url="https://contoso.sharepoint.com")
     assert hits == [sp.SiteHit(title="Docs", url=SITE, description="")]
     assert route.calls.last.request.url.params["querytext"] == "'contentclass:STS_Site Doc*'"
+
+
+def test_missing_field_from_error_nl_and_en() -> None:
+    from m365tools.core.sharepoint import _missing_field_from_error as mf
+
+    sel = ["Id", "File_x0020_Size", "ProgId", "Author/EMail"]
+    assert mf("HTTP 400 - GET x: Het veld of de eigenschap File_x0020_Size bestaat niet.", sel) == "File_x0020_Size"
+    assert mf("The field or property 'ProgId' does not exist.", sel) == "ProgId"
+    assert mf("The field or property 'Author' does not exist.", sel) == "Author/EMail"
+    assert mf("Access denied.", sel) is None
+
+
+async def test_iter_items_drops_rejected_field(fake_client, respx_mock) -> None:
+    import httpx
+
+    from m365tools.core import sharepoint as sp
+
+    lib = sp.LibraryRef(site_url=SITE, web_server_relative_url="/sites/x", list_id="L1", title="Docs",
+                        root_server_relative_url="/sites/x/Docs", item_count=1)
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if "ProgId" in str(request.url):
+            return httpx.Response(400, json={"odata.error": {"message": {"value":
+                "Het veld of de eigenschap ProgId bestaat niet."}}})
+        return httpx.Response(200, json={"value": [{"Id": 1, "FileLeafRef": "a.txt"}]})
+
+    respx_mock.route(host="contoso.sharepoint.com").mock(side_effect=handler)
+    rows = [r async for r in sp.iter_items(fake_client, lib, ["Id", "FileLeafRef", "ProgId"])]
+    assert rows == [{"Id": 1, "FileLeafRef": "a.txt"}]
+    assert len(calls) == 2 and "ProgId" not in calls[1]

@@ -102,3 +102,10 @@ use whichever you have. Paths are relative to `https://<tenant>.sharepoint.com/s
     Check: after migrating a versioned library the destination file shows version 1.0/1 (not 2.0), and Modified/Editor are the source values.
     How: `.../items(<id>)?$select=OData__UIVersionString,Modified,Editor/EMail&$expand=Editor`.
     If a new version appears or Modified is overwritten by "now": drop `bNewDocumentUpdate` or write Modified last (`core/sharepoint.py`).
+
+
+## Verified on a real tenant (2026-10-21, nl-NL site)
+
+- Items 6, 8, 9, 10, 12 passed via `scripts/smoke_real_tenant.py`.
+- `File_x0020_Size` is NOT selectable on `/items` (HTTP 400 'Het veld of de eigenschap ... bestaat niet'). Fixed: size now comes from `$expand=File` / `File/Length`, and `iter_items` drops any field the server rejects and retries.
+- Default library resolves to 'Documenten' at `/Gedeelde documenten`; Reader/Contribute/Full Control masks parse correctly.
