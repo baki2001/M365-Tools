@@ -1,0 +1,41 @@
+[project]
+name = "m365tools"
+version = "0.1.0"
+description = "Microsoft 365 / SharePoint admin toolkit (Linux TUI + CLI)"
+readme = "README.md"
+authors = [
+    { name = "baki2001" },
+]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "msal>=1.39.0",
+    "pydantic>=2.14.1",
+    "rich>=15.0.0",
+    "textual>=8.2.8",
+    "tomli-w>=1.2.0",
+    "typer>=0.27.3",
+]
+
+[project.scripts]
+m365 = "m365tools.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.11.32,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "respx>=0.23.1",
+    "ruff>=0.17.1",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

@@ -1,0 +1,167 @@
+Screen {
+    layout: vertical;
+}
+
+.section-title {
+    text-style: bold;
+    color: $accent;
+    margin: 1 0 0 1;
+}
+
+.field-title {
+    text-style: bold;
+    margin: 1 0 0 1;
+}
+
+.hint {
+    color: $text-muted;
+    margin: 0 1;
+}
+
+.row {
+    height: auto;
+    margin: 0 1;
+}
+
+.field-label {
+    width: 16;
+    padding: 1 1 0 0;
+}
+
+.field-label.wide {
+    width: 50;
+}
+
+Input.short {
+    width: 12;
+}
+
+.buttons {
+    height: auto;
+    margin: 1 1 0 1;
+}
+
+.buttons Button, .buttons Checkbox {
+    margin-right: 1;
+}
+
+#profiles {
+    height: 1fr;
+    margin: 0 1;
+    border: round $primary;
+}
+
+#home-body {
+    height: 1fr;
+}
+
+#hits {
+    height: 8;
+    margin: 0 1;
+    border: round $primary-darken-2;
+}
+
+#libraries {
+    height: 8;
+    margin: 0 1;
+}
+
+#tenant-table {
+    height: 1fr;
+    margin: 0 1;
+}
+
+#tenant-form {
+    grid-size: 2;
+    grid-columns: 16 1fr;
+    grid-rows: 3;
+    height: auto;
+    margin: 0 1;
+}
+
+#tenant-form Label {
+    padding: 1 0 0 0;
+}
+
+#excludes {
+    height: 6;
+    margin: 0 1;
+}
+
+#overwrite {
+    margin: 0 1;
+}
+
+#findings, #entries, #rows, #changes {
+    height: 1fr;
+    margin: 0 1;
+}
+
+#phase, #throttle, #counts, #stats, #current, #target, #endpoints {
+    margin: 0 1;
+    height: auto;
+}
+
+#throttle {
+    color: $warning;
+}
+
+#progress {
+    margin: 1 1 0 1;
+}
+
+#log {
+    height: 1fr;
+    margin: 0 1;
+    border: round $primary-darken-2;
+}
+
+#log.log-small {
+    height: 7;
+}
+
+#runs {
+    height: 1fr;
+    margin: 0 1;
+}
+
+#summary {
+    margin: 1 2;
+    height: auto;
+}
+
+.endpoint, .options {
+    height: 1fr;
+}
+
+ModalScreen {
+    align: center middle;
+}
+
+.dialog {
+    width: 80;
+    max-width: 95%;
+    height: auto;
+    max-height: 90%;
+    border: thick $accent;
+    background: $panel;
+    padding: 1 2;
+}
+
+.dialog.wide {
+    width: 110;
+    height: 90%;
+}
+
+.dialog-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.dialog .buttons {
+    margin: 1 0 0 0;
+}
+
+#library-label {
+    padding: 1 0 0 0;
+}
