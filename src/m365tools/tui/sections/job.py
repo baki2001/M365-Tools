@@ -23,48 +23,127 @@ from m365tools.tools.spmig.models import Endpoint, JobOptions
 
 from .. import theme
 from ..modals import Choice, OptionsModal, PickerModal, PromptModal
-from ..theme import ACCENT, DIM, FG, YELLOW
+from ..theme import DIM, FG, KEY, MODE_STYLE, PEACH, STATE_COLOR, SUB, SURFACE0
 from .base import Section
+from .runs import RunInfo, list_all_runs
 
 
 class Card(Static, can_focus=True):
-    """A focusable bordered box; the job section renders its content."""
+    """A focusable rounded box; the job section renders its content."""
 
 
-def endpoint_table(ep: Endpoint, facts: str) -> Table | Text:
+def _pairs(pairs: list[tuple[str, str]], value_style: str = FG) -> Text:
+    t = Text()
+    for i, (k, v) in enumerate(pairs):
+        if i:
+            t.append(" · ", style=DIM)
+        t.append(f"{k} ", style=SUB).append(v, style=value_style)
+    return t
+
+
+def endpoint_text(ep: Endpoint, facts: str) -> Text:
+    """Line 1: site name (bold) and URL. Line 2: tenant · library · folder · inventory facts when known."""
     if not ep.site_url:
-        return Text("not set  ·  press e to choose tenant, site and library", style=YELLOW)
-    t = Table.grid(padding=(0, 2))
-    t.add_column(style=DIM, no_wrap=True)
-    t.add_column(style=FG)
-    t.add_row("tenant", ep.tenant)
-    t.add_row("site", ep.site_url)
-    t.add_row("library", ep.library or DEFAULT_LIBRARY_LABEL)
-    t.add_row("folder", ep.folder or "(library root)")
+        t = Text("not set", style=f"bold {PEACH}")
+        t.append("\n").append_text(theme.key_hint("e", "choose tenant, site, library and folder"))
+        return t
+    t = Text()
+    t.append(theme.short_site(ep.site_url), style=f"bold {FG}").append("  ").append(ep.site_url, style=SUB)
+    t.append("\n").append_text(_pairs([("tenant", ep.tenant), ("library", ep.library or DEFAULT_LIBRARY_LABEL),
+                                       ("folder", ep.folder or "library root")]))
     if facts:
-        t.add_row("found", Text(facts, style=ACCENT))
+        t.append(" · ", style=DIM).append(facts, style=theme.TEAL)
     return t
 
 
 def options_text(o: JobOptions) -> Text:
-    t = Text()
-    parts = [("overwrite", o.overwrite), ("metadata", "on" if o.restore_metadata else "off"),
-             ("workers", str(o.workers)), ("excludes", ", ".join(o.excludes) or "none"),
-             ("lock after", "on" if o.lock_source_after else "off")]
-    if o.usermap_path:
-        parts.append(("user map", str(o.usermap_path)))
-    for i, (k, v) in enumerate(parts):
-        if i:
-            t.append("  ·  ", style=DIM)
-        t.append(f"{k} ", style=DIM).append(v, style=FG)
+    t = _pairs([("overwrite", o.overwrite), ("metadata", "on" if o.restore_metadata else "off"),
+                ("workers", str(o.workers)), ("lock after", "on" if o.lock_source_after else "off")], KEY)
+    t.append("\n").append_text(_pairs([("excludes", ", ".join(o.excludes) or "none"),
+                                       ("user map", str(o.usermap_path) if o.usermap_path else "none")], KEY))
     for r in o.routes:
-        t.append("\nroute ", style=DIM).append(r.prefix, style=FG).append("  →  ", style=DIM)
-        t.append(r.destination.describe(), style=FG)
+        t.append("\nroute ", style=SUB).append(r.prefix, style=KEY).append("  →  ", style=DIM)
+        t.append(r.destination.describe(), style=KEY)
+    return t
+
+
+# ------------------------------------------------------------------------------------------------ pipeline
+
+STEPS = (("job", "Job"), ("checks", "Checks"), ("plan", "Plan"), ("run", "Run"), ("verify", "Verify"),
+         ("lock", "Lock"))
+NUMERALS = "①②③④⑤⑥"
+DONE_WORD = {"job": "ready", "checks": "clear", "plan": "planned", "run": "done", "verify": "ok", "lock": "locked"}
+FAILED_WORD = {"checks": "blocked", "verify": "problems"}
+
+
+def step_word(key: str, status: str, summary: str) -> str:
+    if status == theme.DONE:
+        return "previewed" if key == "lock" and "locked" not in summary else DONE_WORD[key]
+    if status == theme.FAILED:
+        return FAILED_WORD.get(key, "failed")
+    if status == theme.RUNNING:
+        return "paused" if summary == "paused" else "running"
+    return "not set" if key == "job" else "todo"
+
+
+def pipeline(states: dict[str, tuple[str, str]], width: int) -> Table:
+    """``① Job → ② Checks → ...`` as pills coloured by state, with a one-word status under each."""
+    arrow = " → " if width >= 70 else "›"
+    grid = Table.grid(padding=0)
+    chips: list[Text] = []
+    words: list[Text] = []
+    for i, (key, title) in enumerate(STEPS):
+        status, summary = states.get(key, (theme.TODO, ""))
+        color = STATE_COLOR[status]
+        if i:
+            grid.add_column(no_wrap=True)
+            chips.append(Text(arrow, style=DIM))
+            words.append(Text(""))
+        grid.add_column(no_wrap=True, justify="center")
+        label = f"{NUMERALS[i]} {title}"
+        chips.append(theme.pill(label, color) if status != theme.TODO else
+                     theme.pill(label, SURFACE0, fg=SUB, bold=False))
+        words.append(Text(step_word(key, status, summary), style=color if status != theme.TODO else DIM))
+    grid.add_row(*chips)
+    grid.add_row(*words)
+    return grid
+
+
+class Pipeline(Static):
+    """The six steps of a migration and where this job stands (from the sidebar states)."""
+
+    def __init__(self, *, id: str | None = None, classes: str | None = None) -> None:
+        super().__init__(id=id, classes=classes)
+        self.states: dict[str, tuple[str, str]] = {}
+
+    def set_states(self, states: dict[str, tuple[str, str]]) -> None:
+        self.states = states
+        self.refresh()
+
+    def render(self) -> Table:
+        return pipeline(self.states, self.content_region.width or 80)
+
+
+def recent_runs(runs: list[RunInfo]) -> Table | Text:
+    if not runs:
+        return Text.assemble(("no runs yet · ", SUB), theme.chip("a"),
+                             (" audits both sides; every run leaves a folder here (7 Runs)", SUB))
+    t = Table(box=None, show_edge=False, pad_edge=False, expand=True, padding=(0, 2, 0, 0),
+              header_style=f"bold {SUB}")
+    t.add_column("when", no_wrap=True)
+    t.add_column("mode", no_wrap=True)
+    t.add_column("profile", no_wrap=True, max_width=18, overflow="ellipsis")
+    t.add_column("result", ratio=1, no_wrap=True, overflow="ellipsis")
+    for r in runs:
+        color = MODE_STYLE.get(r.mode, SUB)
+        t.add_row(Text(f"{r.started:%d %b %H:%M}" if r.started else "?", style=FG),
+                  theme.glyph_word(r.mode, color), Text(r.profile, style=SUB), Text(r.summary, style=SUB))
     return t
 
 
 class JobSection(Section):
     KEY, TITLE, NUMBER = "job", "Job", 1
+    TAGLINE, IDLE = "where from, where to, and how", "not set · e to choose"
     PRIMARY = "#card-source"
     HELP = ("Choose the source and destination library. e edits the focused card; o edits the options; "
             "s saves everything as a profile, p loads one.")
@@ -84,9 +163,33 @@ class JobSection(Section):
             card.border_title = title
             yield card
         yield Static("", id="job-hint", classes="hint")
+        pipe = Pipeline(id="pipeline", classes="panel")
+        pipe.border_title = "pipeline"
+        yield pipe
+        runs = Static("", id="recent-runs", classes="panel")
+        runs.border_title = "recent runs"
+        yield runs
 
     def on_mount(self) -> None:
         self.refresh_cards()
+
+    def on_show(self) -> None:
+        self.refresh_runs()
+
+    def refresh_pipeline(self) -> None:
+        try:
+            ws = self.m365.workspace
+            states = {key: (ws.section(key).status, ws.section(key).summary) for key, _ in STEPS}
+            self.query_one(Pipeline).set_states(states)
+        except Exception:  # noqa: BLE001 - not mounted yet
+            return
+
+    def refresh_runs(self) -> None:
+        try:
+            runs = list_all_runs()[:5]
+        except OSError:
+            runs = []
+        self.query_one("#recent-runs", Static).update(recent_runs(runs))
 
     # -- rendering ----------------------------------------------------------------------------------
 
@@ -94,23 +197,26 @@ class JobSection(Section):
         app = self.m365
         o = app.opts
         src_facts, dst_facts = self._facts()
-        self.query_one("#card-source", Card).update(endpoint_table(o.source, src_facts))
-        self.query_one("#card-destination", Card).update(endpoint_table(o.destination, dst_facts))
+        self.query_one("#card-source", Card).update(endpoint_text(o.source, src_facts))
+        self.query_one("#card-destination", Card).update(endpoint_text(o.destination, dst_facts))
         self.query_one("#card-options", Card).update(options_text(o))
         if not app.cfg.tenants:
-            hint = Text("No tenants configured. Quit and run: m365 tenant add <name> --tenant-id ... "
-                        "--client-id ... --host <tenant>.sharepoint.com", style=YELLOW)
+            cmd = "quit and run: m365 tenant add <name> --tenant-id ... --client-id ... --host <tenant>.sharepoint.com"
+            hint = Text.assemble(theme.pill("no tenants", PEACH), "  ", (cmd, SUB))
         elif not app.endpoints_ready():
-            hint = Text("Pick a source and a destination (e), or load a saved profile (p).", style=DIM)
+            hint = Text.assemble(("next  ", SUB), theme.key_hints(
+                [("e", "edit the focused card"), ("p", "load a profile"), ("o", "options")]))
         else:
-            hint = Text("Ready. a audits both sides (nothing is written), d dry-runs, m migrates.", style=DIM)
+            hint = Text.assemble(("next  ", SUB), theme.key_hints(
+                [("a", "audit (writes nothing)"), ("d", "dry run"), ("m", "migrate"), ("s", "save profile")]))
         self.query_one("#job-hint", Static).update(hint)
+        self.refresh_runs()
         if app.endpoints_ready():
             self.status = theme.DONE
             self.summary = src_facts.split(" · folders")[0] if src_facts else (
                 f"{theme.short_site(o.source.site_url)} → {theme.short_site(o.destination.site_url)}")
         else:
-            self.status, self.summary = theme.TODO, "not set"
+            self.status, self.summary = theme.TODO, ""
 
     def _facts(self) -> tuple[str, str]:
         """Inventory facts from the job's last operation (empty before the first audit)."""

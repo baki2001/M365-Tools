@@ -20,7 +20,7 @@ from rich.text import Text
 from textual import on, work
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.timer import Timer
 from textual.widgets import Input, OptionList, Static
@@ -29,12 +29,25 @@ from textual.widgets.option_list import Option
 from m365tools.core.events import AuthPrompt
 from m365tools.tools.spmig.models import JobOptions
 
-from .theme import ACCENT, DIM, FG, RED, YELLOW
-from .widgets import VimList, VimScroll
+from . import theme
+from .theme import BLUE, CRUST, DIM, FG, KEY, MAUVE, RED, SUB, YELLOW
+from .widgets import BarList, BarOption, VimScroll
 
 
-def _hint(*pairs: tuple[str, str]) -> str:
-    return "  ".join(f"{k} {d}" for k, d in pairs)
+def _hint(*pairs: tuple[str, str]) -> Text:
+    """Key hints for the bottom border: key in bold blue, label in subtext."""
+    t = Text()
+    for i, (k, d) in enumerate(pairs):
+        t.append(" · " if i else " ", style=DIM).append(k, style=f"bold {KEY}").append(f" {d}", style=SUB)
+    return t.append(" ")
+
+
+def prompt_row(input_widget: Input) -> Horizontal:
+    """``› text``: an input on surface1 with a prompt glyph (mauve while focused)."""
+    row = Horizontal(classes="prompt-row")
+    row.compose_add_child(Static("›", classes="prompt-glyph"))
+    row.compose_add_child(input_widget)
+    return row
 
 
 class Dialog(ModalScreen[Any]):
@@ -42,7 +55,7 @@ class Dialog(ModalScreen[Any]):
 
     DIALOG_CLASSES = "dialog"
 
-    def __init__(self, title: str, hint: str) -> None:
+    def __init__(self, title: str, hint: Text) -> None:
         super().__init__()
         self.dialog_title = title
         self.dialog_hint = hint
@@ -81,15 +94,16 @@ class TypedConfirmModal(Dialog):
     BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "cancel", "cancel")]
 
     def __init__(self, title: str, body: RenderableType, word: str) -> None:
-        super().__init__(title, _hint(("type", f"'{word}'"), ("enter", "confirm"), ("esc", "cancel")))
+        super().__init__(title, _hint(("type", word), ("enter", "confirm"), ("esc", "cancel")))
         self.body = body
         self.word = word
 
     def compose(self) -> ComposeResult:
         with self.box():
             yield Static(self.body)
-            yield Static(Text.assemble("Type ", (self.word, f"bold {RED}"), " to continue:"), classes="ask")
-            yield Input(placeholder=self.word, id="confirm-word")
+            yield Static(Text.assemble(("type ", SUB), theme.pill(self.word, RED), (" to continue", SUB)),
+                         classes="ask")
+            yield prompt_row(Input(placeholder=self.word, id="confirm-word"))
             yield Static("", id="confirm-error", classes="error-line")
 
     @on(Input.Submitted)
@@ -98,7 +112,7 @@ class TypedConfirmModal(Dialog):
             self.dismiss(True)
         else:
             self.query_one("#confirm-error", Static).update(
-                Text(f"That is not '{self.word}'. Esc cancels.", style=RED))
+                Text.assemble((f"That is not '{self.word}'.", RED), ("  esc cancels", SUB)))
 
     def action_cancel(self) -> None:
         self.dismiss(False)
@@ -125,8 +139,8 @@ class PromptModal(Dialog):
     def compose(self) -> ComposeResult:
         with self.box():
             if self.note:
-                yield Static(Text(self.note, style=DIM))
-            yield Input(value=self.value, placeholder=self.placeholder, id="prompt-input")
+                yield Static(Text(self.note, style=SUB))
+            yield prompt_row(Input(value=self.value, placeholder=self.placeholder, id="prompt-input"))
 
     @on(Input.Changed)
     def _changed(self, event: Input.Changed) -> None:
@@ -150,11 +164,17 @@ class Choice:
     value: Any
     detail: str = ""
 
-    def prompt(self) -> Text:
-        t = Text(self.label, style="bold")
+    def prompt(self, selected: bool = False) -> Text:
+        t = Text(self.label, style=f"bold {CRUST if selected else FG}")
         if self.detail:
-            t.append("  ").append(self.detail, style=DIM)
+            t.append("  ").append(self.detail, style=CRUST if selected else SUB)
         return t
+
+
+class PickerList(BarList):
+    """The picker's list: never focused (typing goes to the input), but its bar is always live."""
+
+    ALWAYS_ACTIVE = True
 
 
 ChoiceLoader = Callable[[], Awaitable[list[Choice]]]
@@ -198,9 +218,9 @@ class PickerModal(Dialog):
     def compose(self) -> ComposeResult:
         with self.box():
             if self.note:
-                yield Static(Text(self.note, style=DIM))
-            yield Input(placeholder=self.placeholder, id="picker-input")
-            yield OptionList(id="picker-list")
+                yield Static(Text(self.note, style=SUB))
+            yield prompt_row(Input(placeholder=self.placeholder, id="picker-input"))
+            yield PickerList(id="picker-list")
             yield Static("", id="picker-status")
 
     def on_mount(self) -> None:
@@ -243,15 +263,15 @@ class PickerModal(Dialog):
     def _show(self, choices: list[Choice], empty: str = "nothing matches") -> None:
         self.shown = choices
         ol = self.query_one(OptionList)
-        ol.set_options([Option(c.prompt()) for c in choices])
+        ol.set_options([BarOption(c.prompt) for c in choices])
         if choices:
             idx = next((i for i, c in enumerate(choices) if c.value == self.highlight_value), 0)
             ol.highlighted = idx
-            self._status(f"{len(choices)} result(s)")
+            self._status(f"{len(choices)} result(s)", SUB)
         else:
             self._status(empty, YELLOW)
 
-    def _status(self, text: str, style: str = DIM) -> None:
+    def _status(self, text: str, style: str = SUB) -> None:
         self.query_one("#picker-status", Static).update(Text(text, style=style))
 
     # -- keys ---------------------------------------------------------------------------------------
@@ -326,11 +346,11 @@ class OptionsModal(Dialog):
 
     def compose(self) -> ComposeResult:
         with self.box():
-            yield VimList(*self._options(), id="options-list")
+            yield BarList(*self._options(), id="options-list")
             yield Static("", id="options-help")
 
     def on_mount(self) -> None:
-        self.query_one(VimList).focus()
+        self.query_one(BarList).focus()
         self._help()
 
     def _options(self) -> list[Option]:
@@ -345,11 +365,18 @@ class OptionsModal(Dialog):
         }
         labels = {"overwrite": "Overwrite", "restore_metadata": "Restore metadata", "workers": "Workers",
                   "excludes": "Excludes", "lock_source_after": "Lock source after", "usermap_path": "User map"}
-        return [Option(Text.assemble((f"{labels[k]:<18}", DIM), (values[k], f"bold {FG}")), id=k)
-                for k in self.ROWS]
+
+        def maker(key: str) -> Any:
+            def make(selected: bool) -> Text:
+                if selected:
+                    return Text.assemble((f"{labels[key]:<20}", CRUST), (values[key], f"bold {CRUST}"))
+                return Text.assemble((f"{labels[key]:<20}", SUB), (values[key], f"bold {BLUE}"))
+            return make
+
+        return [BarOption(maker(k), id=k) for k in self.ROWS]
 
     def _refresh(self) -> None:
-        ol = self.query_one(VimList)
+        ol = self.query_one(BarList)
         idx = ol.highlighted
         ol.set_options(self._options())
         ol.highlighted = idx
@@ -365,10 +392,10 @@ class OptionsModal(Dialog):
             "lock_source_after": "after a clean migration, downgrade writers on the source library to Read",
             "usermap_path": "CSV source_email;target_email used to map authors and editors",
         }.get(key or "", "")
-        self.query_one("#options-help", Static).update(Text(text, style=DIM))
+        self.query_one("#options-help", Static).update(Text(text, style=SUB))
 
     def _row(self) -> str | None:
-        ol = self.query_one(VimList)
+        ol = self.query_one(BarList)
         return self.ROWS[ol.highlighted] if ol.highlighted is not None else None
 
     def on_option_list_option_highlighted(self, _event: OptionList.OptionHighlighted) -> None:
@@ -435,9 +462,11 @@ class TextModal(Dialog):
     DIALOG_CLASSES = "dialog viewer"
     BINDINGS: ClassVar[list[BindingType]] = [Binding("escape,q", "close", "close")]
 
-    def __init__(self, title: str, content: RenderableType) -> None:
+    def __init__(self, title: str, content: RenderableType, *, fit: bool = False) -> None:
         super().__init__(title, _hint(("j/k", "scroll"), ("g/G", "top/bottom"), ("esc", "close")))
         self.content = content
+        if fit:  # as tall as the content (help), instead of a fixed large viewer (reports)
+            self.DIALOG_CLASSES = "dialog viewer fit"
 
     def compose(self) -> ComposeResult:
         with self.box(), VimScroll(id="viewer"):
@@ -451,12 +480,12 @@ class TextModal(Dialog):
 
 
 def auth_text(ev: AuthPrompt) -> Text:
-    t = Text(ev.message)
+    t = Text(ev.message, style=FG)
     if ev.url:
-        t.append("\n\nURL   ", style=DIM).append(ev.url, style=f"bold underline {ACCENT}")
+        t.append("\n\nurl   ", style=SUB).append(ev.url, style=f"bold underline {BLUE}")
     if ev.code:
-        t.append("\nCode  ", style=DIM).append(f" {ev.code} ", style=f"bold reverse {ACCENT}")
-        t.append("\n\n(c copies the code)", style=DIM)
+        t.append("\ncode  ", style=SUB).append_text(theme.pill(ev.code, MAUVE))
+        t.append("\n\n").append_text(theme.key_hint("c", "copies the code"))
     return t
 
 

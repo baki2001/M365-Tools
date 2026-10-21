@@ -13,24 +13,49 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from rich.console import Group
 from rich.table import Table
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
+from textual.widget import Widget
 from textual.widgets import ContentSwitcher, OptionList
 
 from m365tools.core.events import LogLine
 
+from . import theme
 from .modals import TextModal
 from .sections import SECTIONS, Section
-from .theme import ACCENT, DIM, FG
-from .widgets import HeaderBar, KeyBar, Sidebar
+from .theme import FG, SUB
+from .widgets import HeaderBar, KeyBar, NavStatus, Sidebar
 
 if TYPE_CHECKING:
     from .app import M365App
     from .sections import RunSection
+
+
+class MainTitle(Widget):
+    """``1 · Job`` in bold on the left, the section's one-line purpose in subtext on the right."""
+
+    DEFAULT_CSS = "MainTitle { height: 1; margin: 0 0 1 0; }"
+
+    def __init__(self, *, id: str | None = None) -> None:
+        super().__init__(id=id)
+        self.section: type[Section] = SECTIONS[0]
+
+    def show(self, cls: type[Section]) -> None:
+        self.section = cls
+        self.refresh()
+
+    def render(self) -> Table:
+        cls = self.section
+        grid = Table.grid(expand=True)
+        grid.add_column(no_wrap=True)
+        grid.add_column(justify="right", ratio=1, no_wrap=True, overflow="ellipsis")
+        grid.add_row(Text.assemble((f"{cls.NUMBER} · {cls.TITLE}", f"bold {FG}")), Text(cls.TAGLINE, style=SUB))
+        return grid
 
 
 class Workspace(Screen[None]):
@@ -57,12 +82,14 @@ class Workspace(Screen[None]):
     def compose(self) -> ComposeResult:
         yield HeaderBar(id="header")
         with Horizontal(id="body"):
-            sidebar = Sidebar([(s.KEY, s.TITLE) for s in SECTIONS], id="sidebar")
-            sidebar.border_title = "sections"
-            yield sidebar
-            with Vertical(id="main"), ContentSwitcher(id="switcher", initial=SECTIONS[0].KEY):
-                for cls in SECTIONS:
-                    yield cls()
+            with Vertical(id="nav"):
+                yield Sidebar([(s.KEY, s.TITLE, s.IDLE) for s in SECTIONS], id="sidebar")
+                yield NavStatus(id="nav-status")
+            with Vertical(id="main"):
+                yield MainTitle(id="main-title")
+                with ContentSwitcher(id="switcher", initial=SECTIONS[0].KEY):
+                    for cls in SECTIONS:
+                        yield cls()
         yield KeyBar(id="keybar")
 
     def on_mount(self) -> None:
@@ -107,7 +134,7 @@ class Workspace(Screen[None]):
             self.current.focus_primary()
 
     def _title_main(self, cls: type[Section]) -> None:
-        self.query_one("#main").border_title = f"{cls.NUMBER} {cls.TITLE}"
+        self.query_one(MainTitle).show(cls)
 
     def _main_focused(self) -> bool:
         f = self.focused
@@ -124,6 +151,7 @@ class Workspace(Screen[None]):
     def on_section_changed(self, event: Section.Changed) -> None:
         s = event.section
         self.sidebar.set_entry(s.KEY, s.status, s.summary)
+        self.section("job").refresh_pipeline()
 
     # -- navigation actions -------------------------------------------------------------------------
 
@@ -180,40 +208,37 @@ class Workspace(Screen[None]):
 
     def action_help(self) -> None:
         sec = self.current
-        t = Table.grid(padding=(0, 2))
-        t.add_column(style=f"bold {ACCENT}", no_wrap=True, min_width=14)
-        t.add_column(style=FG)
-
-        def heading(title: str) -> None:
-            t.add_row("", "")
-            t.add_row(Text(title, style="bold"), "")
-
-        def keys(bindings: list[BindingType]) -> None:
-            for b in bindings:
-                if isinstance(b, Binding):
-                    t.add_row(b.key_display or self._keys(b.key), b.description)
-
-        t.add_row(Text(f"{sec.NUMBER} {sec.TITLE}", style=f"bold {ACCENT}"), Text(sec.HELP, style=DIM))
-        heading("This section")
-        keys(list(type(sec).BINDINGS))
-        heading("Lists and tables")
-        for k, d in (("j / k", "move down / up"), ("g / G", "top / bottom"), ("ctrl+d / ctrl+u", "page"),
-                     ("/", "filter (where shown)"), ("enter", "open / details")):
-            t.add_row(k, d)
-        heading("Move around")
-        for k, d in (("1 - 7", "show section"), ("tab / shift+tab", "switch between sidebar and main"),
-                     ("h  [", "focus sidebar"), ("l  ]  enter", "focus main (in Lock, l previews)"),
-                     ("esc", "close panel / back to sidebar")):
-            t.add_row(k, d)
-        heading("Anywhere")
-        for k, d in (("a", "audit: inventory + checks, writes nothing"), ("d", "dry run: full plan"),
-                     ("m", "migrate (asks first)"), ("v", "verify"), (":", "command palette"),
-                     ("ctrl+l", "sign in to a tenant"), ("?", "this help"), ("q", "quit")):
-            t.add_row(k, d)
-        self.app.push_screen(TextModal(f"Keys · {sec.TITLE}", t))
+        own = [(b.key_display or self._keys(b.key), b.description) for b in type(sec).BINDINGS
+               if isinstance(b, Binding)]
+        lists = [("j / k", "move down / up"), ("g / G", "top / bottom"), ("ctrl+d / u", "page"),
+                 ("/", "filter (where shown)"), ("enter", "open / details")]
+        move = [("1 - 7", "show section"), ("tab", "switch sidebar / main"), ("h  [", "focus sidebar"),
+                ("l  ]", "focus main (in Lock, l previews)"), ("esc", "close panel / back to sidebar")]
+        anywhere = [("a", "audit: inventory + checks, writes nothing"), ("d", "dry run: full plan"),
+                    ("m", "migrate (asks first)"), ("v", "verify"), (":", "command palette"),
+                    ("ctrl+l", "sign in to a tenant"), ("?", "this help"), ("q", "quit")]
+        left = Group(help_group(f"this section · {sec.NUMBER} {sec.TITLE}", own),
+                     Text(""), help_group("lists and tables", lists))
+        right = Group(help_group("global · move around", move), Text(""), help_group("global · anywhere", anywhere))
+        cols = Table.grid(expand=True, padding=(0, 4))
+        cols.add_column(ratio=1)
+        cols.add_column(ratio=1)
+        cols.add_row(left, right)
+        body = Group(Text(sec.HELP, style=SUB), Text(""), cols)
+        self.app.push_screen(TextModal(f"Keys · {sec.NUMBER} {sec.TITLE}", body, fit=True))
 
     @staticmethod
     def _keys(key: str) -> str:
         names = {"slash": "/", "colon": ":", "question_mark": "?", "left_square_bracket": "[",
                  "right_square_bracket": "]", "plus": "+", "minus": "-"}
         return " ".join(names.get(k, k) for k in key.split(","))
+
+
+def help_group(title: str, rows: list[tuple[str, str]]) -> Group:
+    """A heading in bold mauve, then one row per key: a chip and what it does."""
+    t = Table.grid(padding=(0, 2))
+    t.add_column(no_wrap=True, width=12)
+    t.add_column(style=FG)
+    for key, desc in rows:
+        t.add_row(theme.chip(key), desc)
+    return Group(Text(title, style=f"bold {theme.MAUVE}"), t)

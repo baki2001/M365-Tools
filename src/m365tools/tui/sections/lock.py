@@ -14,13 +14,14 @@ from m365tools.tools.spmig.lock import LockChange
 
 from .. import theme
 from ..modals import TypedConfirmModal
-from ..theme import ACCENT, DIM, FG, GREEN, RED, YELLOW
+from ..theme import DIM, FG, GREEN, SUB, SURFACE1, YELLOW
 from ..widgets import Activity, VimTable
 from .base import Empty, Section
 
 
 class LockSection(Section):
     KEY, TITLE, NUMBER = "lock", "Lock", 6
+    TAGLINE, IDLE = "source library to read-only", "l to preview"
     PRIMARY = "#lock-table"
     HELP = ("l previews which principals of the SOURCE library would be downgraded to Read (nothing changes). "
             "A applies it after you type 'lock'. Access is never widened; the site owners group is kept.")
@@ -38,16 +39,13 @@ class LockSection(Section):
         yield Activity()
         yield Static("", id="lock-counts", classes="counts")
         yield VimTable(id="lock-table")
-        yield Empty("No preview yet.\n\nPress l to see who would be set to Read on the source library.\n"
-                    "Nothing changes until you press A and type 'lock'.", id="lock-empty")
+        yield Empty(theme.empty_text("No preview yet", "Shows who would be set to Read on the source library.\n"
+                                     "Nothing changes until you press A and type 'lock'.", [("l", "preview")]),
+                    id="lock-empty")
 
     def on_mount(self) -> None:
-        table = self.query_one(VimTable)
-        table.add_column("principal", width=36)
-        table.add_column("before", width=30)
-        table.add_column(" ", width=1)
-        table.add_column("after", width=10)
-        table.add_column("note")
+        self.query_one(VimTable).add_fit_columns(("principal", None), ("before", 28), (" ", 1), ("after", 12),
+                                                 ("note", None))
         self._redraw()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
@@ -99,17 +97,19 @@ class LockSection(Section):
         if self.changes is None:
             return
         n = sum(1 for c in self.changes if c.will_change)
-        head = Text()
-        head.append("■ ", style=RED if n else DIM).append(f"{n} to downgrade", style=FG)
-        head.append("   ■ ", style=DIM).append(f"{len(self.changes) - n} left untouched", style=FG)
-        head.append("   ")
-        head.append("APPLIED" if self.applied else "preview only: A applies",
-                    style=f"bold {GREEN}" if self.applied else ACCENT)
+        head = theme.counts_line({"downgrade": n, "untouched": len(self.changes) - n},
+                                 {"downgrade": YELLOW, "untouched": SURFACE1},
+                                 {"downgrade": "to downgrade", "untouched": "left untouched"})
+        if self.applied:
+            head.append_text(theme.pill("● applied", GREEN))
+        else:
+            head.append("preview only · ", style=SUB).append_text(theme.key_hint("A", "applies"))
         self.query_one("#lock-counts", Static).update(head)
         table = self.query_one(VimTable)
         table.clear()
         for c in self.changes:
-            after = Text(c.to_role, style=f"bold {GREEN if self.applied else YELLOW}") if c.will_change else \
+            after = theme.glyph_word(c.to_role, GREEN if self.applied else YELLOW) if c.will_change else \
                 Text("unchanged", style=DIM)
-            table.add_row(Text(c.title, style=FG), Text(", ".join(c.from_roles), style=DIM),
-                          Text("→", style=DIM), after, Text(c.skipped_reason or "", style=DIM))
+            table.add_row(Text(c.title, style=FG, no_wrap=True, overflow="ellipsis"),
+                          Text(", ".join(c.from_roles), style=SUB, no_wrap=True, overflow="ellipsis"),
+                          Text("→", style=DIM), after, Text(c.skipped_reason or "", style=SUB))

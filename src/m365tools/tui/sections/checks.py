@@ -18,27 +18,28 @@ from m365tools.tools.spmig.models import Finding, RunSummary
 
 from .. import theme
 from ..modals import PromptModal
-from ..theme import BAR, DIM, FG, SEVERITY_STYLE
+from ..theme import DIM, FG, SEVERITY_STYLE, SUB
 from ..widgets import Activity, VimScroll, VimTable
 from .base import Empty, Section
 
 
 def finding_detail(f: Finding) -> Table:
-    t = Table.grid(padding=(0, 1))
-    t.add_column(style=DIM, no_wrap=True)
+    t = Table.grid(padding=(0, 2))
+    t.add_column(style=SUB, no_wrap=True)
     t.add_column(style=FG)
-    t.add_row("severity", Text(str(f.severity).upper(), style=SEVERITY_STYLE.get(f.severity, FG)))
-    t.add_row("check", f.category)
-    t.add_row("path", f.path or "-")
+    t.add_row("severity", theme.pill(f"{theme.DOT} {f.severity}", SEVERITY_STYLE.get(str(f.severity), SUB)))
+    t.add_row("check", Text(f.category, style=f"bold {FG}"))
+    t.add_row("path", f.path or Text("library level", style=DIM))
     t.add_row("", "")
     t.add_row("what", f.detail)
     t.add_row("", "")
-    t.add_row("fix", Text(f.fix or "-", style=theme.GREEN if f.fix else DIM))
+    t.add_row("fix", Text(f.fix or "no suggestion", style=theme.GREEN if f.fix else DIM))
     return t
 
 
 class ChecksSection(Section):
     KEY, TITLE, NUMBER = "checks", "Checks", 2
+    TAGLINE, IDLE = "audit · inventory + checks · writes nothing", "a to run the audit"
     PRIMARY = "#findings"
     HELP = ("a runs the audit: both libraries are inventoried and every check runs. Nothing is written to "
             "SharePoint. Blocking findings stop a migration unless you force it.")
@@ -61,18 +62,16 @@ class ChecksSection(Section):
         yield Static("", id="checks-counts", classes="counts")
         with Horizontal(classes="split"):
             yield VimTable(id="findings")
-            with VimScroll(id="finding-detail", classes="detail"):
+            detail = VimScroll(id="finding-detail", classes="detail")
+            detail.border_title = "details"
+            with detail:
                 yield Static("", id="finding-detail-body")
-        yield Empty("No audit yet.\n\nPress a to inventory source and destination and run all checks.\n"
-                    "Nothing is written to SharePoint.", id="checks-empty")
+        yield Empty(theme.empty_text("No audit yet", "Inventories source and destination and runs every check.\n"
+                                     "Nothing is written to SharePoint.", [("a", "run the audit")]),
+                    id="checks-empty")
 
     def on_mount(self) -> None:
-        table = self.query_one(VimTable)
-        table.add_column(" ", width=1, key="bar")
-        table.add_column("severity", width=9)
-        table.add_column("check", width=18)
-        table.add_column("path", width=40)
-        table.add_column("detail")
+        self.query_one(VimTable).add_fit_columns(("severity", 10), ("check", 18), ("path", None), ("detail", None))
         self.query_one("#finding-detail").display = False
         self._redraw()
 
@@ -112,14 +111,16 @@ class ChecksSection(Section):
         counts = {str(s): sum(1 for f in self.findings if f.severity == s) for s in SEVERITY_ORDER}
         line = theme.counts_line(counts, SEVERITY_STYLE)
         if self.filter_text:
-            line.append(f"filter: {self.filter_text}  ({len(self.shown)} shown)", style=theme.ACCENT)
+            line.append(" filter ", style=SUB).append(self.filter_text, style=f"bold {theme.MAUVE}")
+            line.append(f" · {len(self.shown)} shown", style=SUB)
         self.query_one("#checks-counts", Static).update(line)
         table = self.query_one(VimTable)
         table.clear()
         for i, f in enumerate(self.shown):
-            style = SEVERITY_STYLE.get(f.severity, FG)
-            table.add_row(Text(BAR, style=style), Text(str(f.severity), style=style), Text(f.category),
-                          Text(f.path, style=FG, overflow="ellipsis"), Text(f.detail, style=DIM), key=str(i))
+            color = SEVERITY_STYLE.get(str(f.severity), SUB)
+            table.add_row(theme.glyph_word(str(f.severity), color), Text(f.category, style=FG),
+                          Text(f.path, style=FG, no_wrap=True, overflow="ellipsis"),
+                          Text(f.detail, style=SUB, no_wrap=True, overflow="ellipsis"), key=str(i))
         has = bool(self.findings)
         self.query_one(".split").display = has
         self.query_one("#checks-counts").display = has

@@ -15,7 +15,7 @@ from m365tools.tools.spmig.models import Action, Plan, PlanEntry
 
 from .. import theme
 from ..modals import PromptModal
-from ..theme import ACCENT, ACTION_LABEL, ACTION_STYLE, DIM, FG
+from ..theme import ACTION_LABEL, ACTION_STYLE, FG, MAUVE, SUB
 from ..widgets import Activity, VimTable
 from .base import Empty, Section
 
@@ -25,6 +25,7 @@ FILTERS: tuple[str | None, ...] = (None, *(a.value for a in Action))
 
 class PlanSection(Section):
     KEY, TITLE, NUMBER = "plan", "Plan", 3
+    TAGLINE, IDLE = "dry run · what a migration would do", "d for a dry run"
     PRIMARY = "#plan-table"
     HELP = ("d runs a dry run: the full plan (create / copy / skip / conflict / excluded per item) without "
             "copying anything. f cycles the action filter, / filters by text.")
@@ -46,16 +47,13 @@ class PlanSection(Section):
         yield Static("", id="plan-counts", classes="counts")
         yield VimTable(id="plan-table")
         yield Static("", id="plan-totals", classes="totals")
-        yield Empty("No dry run yet.\n\nPress d to compute the plan: what would be created, copied, skipped.\n"
-                    "Nothing is written to SharePoint.", id="plan-empty")
+        yield Empty(theme.empty_text("No dry run yet", "Computes the full plan: what would be created, copied, "
+                                     "skipped.\nNothing is written to SharePoint.", [("d", "dry run")]),
+                    id="plan-empty")
 
     def on_mount(self) -> None:
-        table = self.query_one(VimTable)
-        table.add_column("action", width=9)
-        table.add_column("path", width=60)
-        table.add_column("size", width=10)
-        table.add_column("modified", width=16)
-        table.add_column("note")
+        self.query_one(VimTable).add_fit_columns(("action", 10), ("path", None), ("size", 10), ("modified", 16),
+                                                 ("note", 24))
         self._redraw()
 
     @work(exclusive=True, group="op", exit_on_error=False)
@@ -93,9 +91,9 @@ class PlanSection(Section):
             return
         counts = {a.value: n for a, n in plan.counts().items()}
         line = theme.counts_line(counts, ACTION_STYLE, ACTION_LABEL)
-        line.append("filter: ", style=DIM).append(ACTION_LABEL.get(self.kind_filter or "", "all"), style=ACCENT)
+        line.append(" f ", style=SUB).append(ACTION_LABEL.get(self.kind_filter or "", "all"), style=f"bold {MAUVE}")
         if self.filter_text:
-            line.append(f"  /{self.filter_text}", style=ACCENT)
+            line.append("  / ", style=SUB).append(self.filter_text, style=f"bold {MAUVE}")
         self.query_one("#plan-counts", Static).update(line)
         words = self.filter_text.lower().split()
         shown = [e for e in plan.entries if self._matches(e, words)]
@@ -103,20 +101,22 @@ class PlanSection(Section):
         table.clear()
         for e in shown[:MAX_ROWS]:
             it = e.item
-            style = ACTION_STYLE.get(e.action, FG)
-            note = e.reason + (f"  [route {e.route}]" if e.route else "")
-            table.add_row(Text(ACTION_LABEL.get(e.action, e.action), style=style),
-                          Text(it.rel_path + ("/" if it.is_folder else ""), overflow="ellipsis"),
-                          Text("" if it.is_folder else theme.size(it.size), justify="right"),
-                          Text(f"{it.modified:%Y-%m-%d %H:%M}" if it.modified else "", style=DIM),
-                          Text(note, style=DIM))
+            color = ACTION_STYLE.get(e.action, SUB)
+            note = " · ".join(p for p in (e.reason, f"route {e.route}" if e.route else "") if p)
+            table.add_row(theme.glyph_word(ACTION_LABEL.get(e.action, e.action), color, theme.BLOCK),
+                          Text(it.rel_path + ("/" if it.is_folder else ""), style=FG, no_wrap=True,
+                               overflow="ellipsis"),
+                          Text("" if it.is_folder else theme.size(it.size), justify="right", style=FG),
+                          Text(f"{it.modified:%Y-%m-%d %H:%M}" if it.modified else "", style=SUB),
+                          Text(note, style=SUB, no_wrap=True, overflow="ellipsis"))
         files = [e for e in shown if not e.item.is_folder]
         tot = Text()
-        tot.append("Σ ", style=f"bold {ACCENT}").append(f"{len(shown):,} entries", style=FG)
-        tot.append(f"  ·  {len(files):,} files  ·  {theme.size(sum(e.item.size for e in files))}", style=FG)
-        tot.append(f"  ·  to copy {theme.size(plan.bytes_to_copy())}", style=ACTION_STYLE["copy"])
+        tot.append("Σ ", style=f"bold {MAUVE}").append(f"{len(shown):,}", style=f"bold {FG}")
+        tot.append(" entries · ", style=SUB).append(f"{len(files):,}", style=f"bold {FG}").append(" files · ", style=SUB)
+        tot.append(theme.size(sum(e.item.size for e in files)), style=f"bold {FG}")
+        tot.append(" · to copy ", style=SUB).append(theme.size(plan.bytes_to_copy()), style=f"bold {theme.GREEN}")
         if len(shown) > MAX_ROWS:
-            tot.append(f"  ·  first {MAX_ROWS:,} rows shown (see plan.json)", style=theme.YELLOW)
+            tot.append(f" · first {MAX_ROWS:,} rows shown (see plan.json)", style=theme.YELLOW)
         self.query_one("#plan-totals", Static).update(tot)
 
     def action_cycle_filter(self) -> None:

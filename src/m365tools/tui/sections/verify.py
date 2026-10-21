@@ -15,7 +15,7 @@ from m365tools.tools.spmig.models import CompareResult
 
 from .. import theme
 from ..modals import PromptModal
-from ..theme import ACCENT, DIM, FG, VERIFY_STYLE
+from ..theme import FG, MAUVE, SUB, VERIFY_LABEL, VERIFY_STYLE
 from ..widgets import Activity, VimTable
 from .base import Empty, Section
 
@@ -27,6 +27,7 @@ FILTERS: tuple[str | None, ...] = (None, "problems", *STATUSES)
 
 class VerifySection(Section):
     KEY, TITLE, NUMBER = "verify", "Verify", 5
+    TAGLINE, IDLE = "compare source and destination", "v after a migration"
     PRIMARY = "#verify-table"
     HELP = ("v compares source and destination: missing files, size differences (Office files are allowed to "
             "differ), source newer than destination. f cycles the status filter, / filters by text.")
@@ -47,16 +48,12 @@ class VerifySection(Section):
         yield Activity()
         yield Static("", id="verify-counts", classes="counts")
         yield VimTable(id="verify-table")
-        yield Empty("Not verified yet.\n\nPress v after a migration to compare source and destination.",
-                    id="verify-empty")
+        yield Empty(theme.empty_text("Not verified yet", "After a migration: compares source and destination file "
+                                     "by file.", [("v", "verify")]), id="verify-empty")
 
     def on_mount(self) -> None:
-        table = self.query_one(VimTable)
-        table.add_column("status", width=20)
-        table.add_column("path", width=60)
-        table.add_column("source", width=10)
-        table.add_column("destination", width=11)
-        table.add_column("detail")
+        self.query_one(VimTable).add_fit_columns(("status", 21), ("path", None), ("source", 10),
+                                                 ("destination", 11), ("detail", 24))
         self._redraw()
 
     @work(exclusive=True, group="op", exit_on_error=False)
@@ -87,10 +84,11 @@ class VerifySection(Section):
         if res is None:
             return
         counts = res.counts()
-        line = theme.counts_line({k: counts.get(k, 0) for k in STATUSES}, VERIFY_STYLE)
-        line.append("filter: ", style=DIM).append(self.status_filter or "all", style=ACCENT)
+        line = theme.counts_line({k: counts.get(k, 0) for k in STATUSES}, VERIFY_STYLE, VERIFY_LABEL)
+        flt = VERIFY_LABEL.get(self.status_filter or "", self.status_filter or "all")
+        line.append(" f ", style=SUB).append(flt, style=f"bold {MAUVE}")
         if self.filter_text:
-            line.append(f"  /{self.filter_text}", style=ACCENT)
+            line.append("  / ", style=SUB).append(self.filter_text, style=f"bold {MAUVE}")
         self.query_one("#verify-counts", Static).update(line)
         words = self.filter_text.lower().split()
         flt = self.status_filter
@@ -100,11 +98,12 @@ class VerifySection(Section):
         table = self.query_one(VimTable)
         table.clear()
         for r in rows[:MAX_ROWS]:
-            table.add_row(Text(r.status, style=VERIFY_STYLE.get(r.status, FG)),
-                          Text(r.rel_path + ("/" if r.is_folder else ""), overflow="ellipsis"),
-                          Text(theme.size(r.src_size), justify="right"),
-                          Text(theme.size(r.dst_size), justify="right"),
-                          Text(r.detail, style=DIM))
+            table.add_row(theme.glyph_word(VERIFY_LABEL.get(r.status, r.status), VERIFY_STYLE.get(r.status, SUB)),
+                          Text(r.rel_path + ("/" if r.is_folder else ""), style=FG, no_wrap=True,
+                               overflow="ellipsis"),
+                          Text(theme.size(r.src_size), justify="right", style=FG),
+                          Text(theme.size(r.dst_size), justify="right", style=FG),
+                          Text(r.detail, style=SUB, no_wrap=True, overflow="ellipsis"))
 
     def action_cycle_filter(self) -> None:
         self.status_filter = FILTERS[(FILTERS.index(self.status_filter) + 1) % len(FILTERS)]

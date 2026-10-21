@@ -43,6 +43,8 @@ class Section(Vertical):
     NUMBER: ClassVar[int] = 0
     PRIMARY: ClassVar[str] = ""
     HELP: ClassVar[str] = ""  # one paragraph shown at the top of the ? help
+    TAGLINE: ClassVar[str] = ""  # right side of the title row
+    IDLE: ClassVar[str] = ""  # sidebar line 2 while there is nothing to summarise (a hint, never bare)
 
     status: reactive[str] = reactive(theme.TODO)
     summary: reactive[str] = reactive("")
@@ -134,4 +136,4 @@ def set_text(widget: Static, text: str | Text, style: str = "") -> None:
 class Empty(Static):
     """Centred hint shown instead of an empty table (``Press a to run the audit``)."""
 
-    DEFAULT_CSS = "Empty { width: 1fr; height: 1fr; content-align: center middle; color: $text-muted; }"
+    DEFAULT_CSS = "Empty { width: 1fr; height: 1fr; content-align: center middle; text-align: center; }"

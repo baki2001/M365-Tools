@@ -28,7 +28,7 @@ from m365tools.tools.spmig.models import Endpoint, JobOptions, RunSummary
 
 from .commands import M365Commands
 from .modals import AuthModal, Choice, ConfirmModal, PickerModal
-from .theme import THEME
+from .theme import THEME, THEME_VARIABLES
 from .workspace import Workspace
 
 
@@ -72,6 +72,10 @@ class M365App(App[None]):
         self.current_job: Any = None
         self._listener: Any = None
         self._auth_modal: AuthModal | None = None
+
+    def get_theme_variable_defaults(self) -> dict[str, str]:
+        """The palette tokens ($mauve, $surface1 ...) exist before the theme is applied, so app.tcss parses."""
+        return {**super().get_theme_variable_defaults(), **THEME_VARIABLES}
 
     def on_mount(self) -> None:
         self.register_theme(THEME)
@@ -157,6 +161,7 @@ class M365App(App[None]):
             ws = self.workspace
             ws.query_one("#header").refresh()
             ws.section("job").refresh_cards()
+            ws.section("runs").action_reload()  # the operation left a run folder
             ws.refresh_bindings()
 
     def report_error(self, exc: BaseException, where: str) -> None:

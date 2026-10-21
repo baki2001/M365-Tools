@@ -1,13 +1,16 @@
-/* One theme ("m365", see theme.py). Focused pane: heavy accent border. Everything else: thin, dim. */
+/* Catppuccin Mocha ("m365" theme, see theme.py). Every colour is a palette token: $base $mantle $crust
+   $surface0 $surface1 $foreground $subtext0 $overlay0 $blue $lavender $mauve $green $yellow $peach $red $teal.
+   Focus and selection are mauve; boxes are rounded surface1 and turn mauve when focused; boxes never touch. */
 
 Screen {
-    background: $background;
+    background: $base;
+    color: $foreground;
     layout: vertical;
 }
 
 #header {
     height: 1;
-    background: $panel;
+    background: $mantle;
 }
 
 #body {
@@ -16,52 +19,75 @@ Screen {
 
 #keybar {
     height: 1;
-    background: $panel;
+    background: $mantle;
 }
 
-/* ---------------------------------------------------------------- panes */
+/* ---------------------------------------------------------------- sidebar */
+
+#nav {
+    width: 26;
+    height: 1fr;
+    background: $mantle;
+    padding: 1 0 0 0;
+}
 
 #sidebar {
-    width: 30%;
-    max-width: 44;
-    min-width: 26;
     height: 1fr;
-    border: round $panel-lighten-2;
-    border-title-color: $text-muted;
-    background: $background;
+    max-height: 100%;
+    border: none;
     padding: 0;
+    background: $mantle;
+    scrollbar-size-vertical: 0;
 }
 
 #sidebar:focus {
-    border: heavy $accent;
-    border-title-color: $accent;
-    border-title-style: bold;
+    border: none;
+    background-tint: $foreground 0%;
 }
 
 #sidebar > .option-list--option {
-    padding: 0 0 1 0;
+    padding: 0 1;
+}
+
+#sidebar > .option-list--separator {
+    color: $mantle;
 }
 
 #sidebar > .option-list--option-highlighted {
-    background: $panel;
+    background: $surface1;
+    color: $foreground;
+    text-style: none;
 }
 
 #sidebar:focus > .option-list--option-highlighted {
-    background: $accent 25%;
+    background: $mauve;
+    color: $crust;
+    text-style: none;
 }
+
+#sidebar > .option-list--option-hover {
+    background: $surface0;
+}
+
+#nav-status {
+    height: auto;
+    padding: 0 1;
+    border-top: solid $surface0;
+    background: $mantle;
+}
+
+/* ---------------------------------------------------------------- main pane */
 
 #main {
     width: 1fr;
     height: 1fr;
-    border: round $panel-lighten-2;
-    border-title-color: $text-muted;
-    padding: 0 1;
+    padding: 1 2;
+    background: $base;
+    border-left: outer $base;
 }
 
 #main:focus-within {
-    border: heavy $accent;
-    border-title-color: $accent;
-    border-title-style: bold;
+    border-left: outer $mauve;
 }
 
 #switcher, .section {
@@ -82,27 +108,48 @@ Screen {
 
 .hint {
     height: auto;
-    margin: 1 0 0 0;
+    margin: 0 0 1 0;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
 }
 
 DataTable {
     height: 1fr;
-    background: $background;
+    background: $base;
     scrollbar-size-vertical: 1;
 }
 
+DataTable:focus {
+    background-tint: $foreground 0%;
+}
+
 DataTable > .datatable--header {
-    background: $background;
-    color: $text-muted;
+    background: $surface0;
+    color: $foreground;
     text-style: bold;
 }
 
+DataTable:focus > .datatable--header {
+    background-tint: $foreground 0%;
+}
+
+DataTable > .datatable--header-hover {
+    background: $surface0;
+}
+
+DataTable > .datatable--hover {
+    background: $surface0 50%;
+}
+
 DataTable > .datatable--cursor {
-    background: $panel;
+    background: $surface1;
+    color: $foreground;
+    text-style: none;
 }
 
 DataTable:focus > .datatable--cursor {
-    background: $accent 30%;
+    background: $mauve;
+    color: $crust;
     text-style: bold;
 }
 
@@ -111,28 +158,53 @@ DataTable:focus > .datatable--cursor {
 }
 
 .detail {
-    width: 45%;
+    width: 40%;
+    min-width: 34;
     height: 1fr;
-    border: round $accent;
-    border-title-color: $accent;
+    border: round $surface1;
+    border-title-color: $subtext0;
+    border-title-style: bold;
     padding: 0 1;
-    margin-left: 1;
+    margin-left: 2;
 }
 
-/* ---------------------------------------------------------------- job cards */
+.detail:focus {
+    border: round $mauve;
+    border-title-color: $mauve;
+}
+
+/* ---------------------------------------------------------------- job: cards, pipeline, recent runs */
+
+#job {
+    overflow-y: auto;
+    scrollbar-size-vertical: 1;
+}
 
 .card {
+    width: 100%;
     height: auto;
-    border: round $panel-lighten-2;
-    border-title-color: $text-muted;
+    border: round $surface1;
+    border-title-color: $subtext0;
+    border-title-style: bold;
     padding: 0 1;
     margin: 0 0 1 0;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
 }
 
 .card:focus {
-    border: heavy $accent;
-    border-title-color: $accent;
+    border: round $mauve;
+    border-title-color: $mauve;
+}
+
+.panel {
+    width: 100%;
+    height: auto;
+    border: round $surface0;
+    border-title-color: $overlay0;
     border-title-style: bold;
+    padding: 0 1;
+    margin: 0 0 1 0;
 }
 
 /* ---------------------------------------------------------------- run dashboard */
@@ -144,8 +216,8 @@ DataTable:focus > .datatable--cursor {
 
 .banner {
     height: 1;
-    background: $warning;
-    color: $background;
+    background: $yellow;
+    color: $crust;
     text-style: bold;
     margin: 0 0 1 0;
 }
@@ -160,12 +232,13 @@ DataTable:focus > .datatable--cursor {
 
 .bar-label {
     width: 7;
-    color: $text-muted;
+    color: $subtext0;
 }
 
 .bar-count {
     width: 24;
     padding-left: 2;
+    color: $foreground;
 }
 
 .bar-row ProgressBar {
@@ -177,12 +250,23 @@ DataTable:focus > .datatable--cursor {
 }
 
 Bar > .bar--bar {
-    color: $accent;
-    background: $panel;
+    color: $mauve;
+    background: $surface1;
+}
+
+Bar > .bar--indeterminate {
+    color: $surface1;
+    background: $surface1;
 }
 
 Bar > .bar--complete {
-    color: $success;
+    color: $green;
+    background: $surface1;
+}
+
+PercentageStatus {
+    text-style: bold;
+    color: $foreground;
 }
 
 .stats {
@@ -198,13 +282,17 @@ Bar > .bar--complete {
 #log {
     height: 1fr;
     min-height: 5;
-    border-top: solid $panel-lighten-2;
-    background: $background;
+    border: round $surface1;
+    border-title-color: $subtext0;
+    border-title-style: bold;
+    padding: 0 1;
+    background: $base;
     scrollbar-size-vertical: 1;
 }
 
 #log:focus {
-    border-top: solid $accent;
+    border: round $mauve;
+    border-title-color: $mauve;
 }
 
 #run.-biglog #dash {
@@ -215,7 +303,7 @@ Bar > .bar--complete {
 
 ModalScreen {
     align: center middle;
-    background: $background 60%;
+    background: $crust 60%;
 }
 
 .dialog {
@@ -223,11 +311,12 @@ ModalScreen {
     max-width: 95%;
     height: auto;
     max-height: 90%;
-    border: heavy $accent;
-    border-title-color: $accent;
+    border: round $mauve;
+    border-title-color: $mauve;
     border-title-style: bold;
-    border-subtitle-color: $text-muted;
-    background: $surface;
+    border-title-background: $surface0;
+    border-subtitle-background: $surface0;
+    background: $surface0;
     padding: 1 2;
 }
 
@@ -245,25 +334,63 @@ ModalScreen {
     height: 85%;
 }
 
-.dialog Input {
-    border: tall $panel-lighten-2;
-    background: $background;
+.prompt-row {
+    height: 1;
     margin: 1 0 0 0;
+    background: $surface1;
 }
 
-.dialog Input:focus {
-    border: tall $accent;
+.prompt-glyph {
+    width: 3;
+    padding: 0 1;
+    color: $overlay0;
+    background: $surface1;
+    text-style: bold;
+}
+
+.prompt-row:focus-within .prompt-glyph {
+    color: $mauve;
+}
+
+.prompt-row Input {
+    width: 1fr;
+    height: 1;
+    border: none;
+    padding: 0 1 0 0;
+    background: $surface1;
+    color: $foreground;
+}
+
+.prompt-row Input:focus {
+    border: none;
+    background-tint: $foreground 0%;
+}
+
+.prompt-row Input > .input--placeholder {
+    color: $overlay0;
 }
 
 .dialog OptionList {
     height: 1fr;
     border: none;
-    background: $surface;
+    padding: 0;
+    background: $surface0;
     margin: 1 0 0 0;
 }
 
-.dialog OptionList > .option-list--option-highlighted {
-    background: $accent 30%;
+.dialog OptionList:focus {
+    border: none;
+    background-tint: $foreground 0%;
+}
+
+.dialog OptionList > .option-list--option {
+    padding: 0 1;
+}
+
+.dialog OptionList > .option-list--option-highlighted,
+.dialog OptionList:focus > .option-list--option-highlighted {
+    background: $mauve;
+    color: $crust;
     text-style: bold;
 }
 
@@ -279,6 +406,17 @@ ModalScreen {
 
 #viewer {
     height: 1fr;
+    background: $surface0;
+}
+
+.dialog.viewer.fit {
+    width: 120;
+    height: auto;
+}
+
+.dialog.fit #viewer {
+    height: auto;
+    max-height: 80vh;
 }
 
 PromptModal.-bottom {
@@ -293,8 +431,17 @@ PromptModal.-bottom .dialog {
     margin: 0 0 1 0;
 }
 
-/* ---------------------------------------------------------------- toasts */
+PromptModal.-bottom .prompt-row {
+    margin: 0;
+}
+
+/* ---------------------------------------------------------------- command palette and toasts */
+
+CommandPalette > Vertical {
+    background: $surface0;
+}
 
 Toast {
-    background: $panel;
+    background: $surface0;
+    color: $foreground;
 }

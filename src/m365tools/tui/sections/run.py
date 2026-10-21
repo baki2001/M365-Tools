@@ -17,6 +17,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
+from rich import box
+from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from textual import work
@@ -41,11 +43,26 @@ from m365tools.tools.spmig.models import RunSummary
 
 from .. import theme
 from ..modals import Choice, ConfirmModal, PickerModal, TypedConfirmModal
-from ..theme import ACCENT, DIM, FG, GREEN, RED, YELLOW
+from ..theme import BLUE, DIM, FG, GREEN, MAUVE, RED, SUB, SURFACE1, YELLOW
 from ..widgets import VimLog
 from .base import Section
 
+STEP_COLOR = {"folder": theme.TEAL, "download": BLUE, "upload": MAUVE, "metadata": theme.TEAL, "verify": GREEN}
 TRANSFER_PHASES = ("folders", "files", "finalize")
+
+
+def tile(label: str, value: str, style: str = FG) -> Panel:
+    """A stat tile: small label in subtext, big value in bold, in a rounded box."""
+    return Panel(Text.assemble((label, SUB), "\n", (value, f"bold {style}")), box=box.ROUNDED,
+                 border_style=SURFACE1, padding=(0, 1))
+
+
+def state_line(word: str, color: str, detail: str = "", *, fg: str = theme.CRUST) -> Text:
+    """``[ migrating ]  auditing both sides first``: a state pill, then the detail in subtext."""
+    t = theme.pill(word, color, fg=fg)
+    if detail:
+        t.append("  ").append(detail, style=SUB)
+    return t
 
 
 def run_status_line(run: Path) -> str:
@@ -61,6 +78,7 @@ def run_status_line(run: Path) -> str:
 
 class RunSection(Section):
     KEY, TITLE, NUMBER = "run", "Run", 4
+    TAGLINE, IDLE = "migration dashboard · log", "m to migrate"
     PRIMARY = "#log"
     HELP = ("m starts the migration (the audit runs again first). p pauses after the files in progress and "
             "resumes in the same run folder; x stops; r resumes an earlier run. L toggles a full-height log.")
@@ -100,11 +118,16 @@ class RunSection(Section):
                 yield Static("", id="bytes-count", classes="bar-count")
             yield Static("", id="run-stats", classes="stats")
             yield Static("", id="run-now", classes="now")
-        yield VimLog(id="log")
+        log = VimLog(id="log")
+        log.border_title = "log"
+        yield log
 
     def on_mount(self) -> None:
         self.query_one("#throttle").display = False
-        self._state(Text.assemble(("idle", "bold"), ("  ·  m migrates the job, r resumes an earlier run", DIM)))
+        idle = state_line("idle", SURFACE1, fg=FG)
+        idle.append("  ").append_text(theme.key_hints([("m", "migrate the job"), ("r", "resume an earlier run")]))
+        self._state(idle)
+        self._now(Text.assemble(theme.pill("now", SURFACE1, fg=SUB, bold=False), ("  nothing running", DIM)))
         self._redraw_stats()
         self.set_interval(1, self._tick)
 
@@ -152,11 +175,11 @@ class RunSection(Section):
     def _confirm_body(self, resume_run_dir: Path | None) -> Text:
         o = self.m365.opts
         t = Text()
-        t.append("from  ", style=DIM).append(o.source.describe(), style=FG)
-        t.append("\nto    ", style=DIM).append(o.destination.describe(), style=FG)
+        t.append("from  ", style=SUB).append(o.source.describe(), style=FG)
+        t.append("\nto    ", style=SUB).append(o.destination.describe(), style=FG)
         if resume_run_dir is not None:
-            t.append("\nrun   ", style=DIM).append(str(resume_run_dir), style=FG)
-        t.append("\n\nThe audit runs again first; files are then copied to the destination.", style=DIM)
+            t.append("\nrun   ", style=SUB).append(str(resume_run_dir), style=FG)
+        t.append("\n\nThe audit runs again first; files are then copied to the destination.", style=SUB)
         return t
 
     async def _ask_force(self, n: int) -> bool:
@@ -178,7 +201,7 @@ class RunSection(Section):
         if resume_run_dir is None:
             self.result = None
         self.status, self.summary = theme.RUNNING, "starting"
-        self._state(Text.assemble(("◐ migrating", f"bold {YELLOW}"), ("  ·  auditing both sides first", DIM)))
+        self._state(state_line("◐ migrating", YELLOW, "auditing both sides first"))
         self.refresh_bindings()
         try:
             summary: RunSummary = await job.migrate(resume_run_dir=resume_run_dir, force=force)
@@ -186,23 +209,22 @@ class RunSection(Section):
             self.run_dir = getattr(job, "run_dir", None) or self.run_dir
             if self._stop_requested:
                 self.status, self.summary = theme.TODO, "stopped"
-                self._state(Text("Stopped before any file was copied.", style=YELLOW))
+                self._state(state_line("■ stopped", YELLOW, "before any file was copied"))
             else:
                 self.paused = True
                 self.status, self.summary = theme.RUNNING, "paused"
-                self._state(Text.assemble(("❚❚ paused", f"bold {YELLOW}"),
-                                          ("  ·  before the transfer started; p resumes, x stops", DIM)))
+                self._state(state_line("❚❚ paused", YELLOW, "before the transfer started · p resumes · x stops"))
             raise
         except BlockingFindingsError as exc:
             self.run_dir = exc.run_dir
             app.workspace.section("checks").show_findings(exc.findings, exc.run_dir, RunSummary(
                 "audit", datetime.now(), datetime.now(), exc.run_dir, findings=exc.findings))
             self.status, self.summary = theme.FAILED, f"refused: {len(exc.blocking)} blocking"
-            self._state(Text(f"Refused: {exc}", style=f"bold {RED}"))
+            self._state(state_line("✗ refused", RED, str(exc)))
             return "blocked"
         except Exception as exc:  # noqa: BLE001 - shown to the user
             self.status, self.summary = theme.FAILED, "failed"
-            self._state(Text(f"Failed: {type(exc).__name__}: {exc}", style=f"bold {RED}"))
+            self._state(state_line("✗ failed", RED, f"{type(exc).__name__}: {exc}"))
             app.report_error(exc, "migrate")
             return "failed"
         finally:
@@ -214,8 +236,7 @@ class RunSection(Section):
         if summary.stopped_early and self._pause_requested and not self._stop_requested:
             self.paused = True
             self.status, self.summary = theme.RUNNING, "paused"
-            self._state(Text.assemble(("❚❚ paused", f"bold {YELLOW}"),
-                                      ("  ·  p resumes from the journal, x stops", DIM)))
+            self._state(state_line("❚❚ paused", YELLOW, "p resumes from the journal · x stops"))
             return "paused"
         self._finished(summary)
         return "done"
@@ -238,12 +259,14 @@ class RunSection(Section):
         self.status = theme.FAILED if bad else theme.DONE
         self.summary = f"{s.copied:,} copied" + (f" · {s.failed} failed" if s.failed else "") + (
             " · stopped" if s.stopped_early else "")
-        t = Text()
-        t.append("✗ finished with failures" if bad else ("■ stopped" if s.stopped_early else "● done"),
-                 style=f"bold {RED if bad else YELLOW if s.stopped_early else GREEN}")
-        t.append(f"  ·  copied {s.copied:,}  skipped {s.skipped:,}  failed {s.failed:,}  "
-                 f"metadata warnings {s.metadata_warnings:,}  ·  {theme.size(s.bytes_copied)}", style=FG)
-        t.append(f"\nreport  {Path(s.run_dir) / 'report.html'}", style=DIM)
+        t = state_line("✗ finished with failures" if bad else ("■ stopped" if s.stopped_early else "● done"),
+                       RED if bad else YELLOW if s.stopped_early else GREEN)
+        t.append("  ")
+        for i, (label, n) in enumerate((("copied", s.copied), ("skipped", s.skipped), ("failed", s.failed),
+                                        ("metadata warnings", s.metadata_warnings))):
+            t.append(" · " if i else "", style=DIM).append(f"{n:,}", style=f"bold {FG}").append(f" {label}", style=SUB)
+        t.append(" · ", style=DIM).append(theme.size(s.bytes_copied), style=f"bold {FG}")
+        t.append("\nreport  ", style=SUB).append(str(Path(s.run_dir) / "report.html"), style=f"underline {BLUE}")
         self._state(t)
         self.m365.notify(f"Migration {'finished with failures' if bad else 'done'}: {s.copied:,} copied, "
                          f"{s.failed} failed.", severity="error" if bad else "information", markup=False)
@@ -273,8 +296,7 @@ class RunSection(Section):
             job = self.m365.current_job
             if job is not None:
                 job.request_stop()
-            self._state(Text(("Stopping" if stop else "Pausing") + ": finishing the files in progress ...",
-                             style=YELLOW))
+            self._state(state_line("stopping" if stop else "pausing", YELLOW, "finishing the files in progress ..."))
         elif self._worker is not None:
             self._worker.cancel()
 
@@ -294,7 +316,7 @@ class RunSection(Section):
                 self._finished(self.result)
             else:
                 self.status, self.summary = theme.TODO, "stopped"
-                self._state(Text("Stopped.", style=YELLOW))
+                self._state(state_line("■ stopped", YELLOW))
             self.refresh_bindings()
 
     @work(group="pick", exclusive=True, exit_on_error=False)
@@ -331,24 +353,28 @@ class RunSection(Section):
         if isinstance(ev, PhaseChanged):
             self.phase = ev.phase
             self.summary = ev.phase
-            self._state(Text.assemble(("◐ migrating", f"bold {YELLOW}"), ("  ·  ", DIM),
-                                      (ev.phase, f"bold {FG}"), (f"  {ev.detail}" if ev.detail else "", DIM)))
+            t = state_line("◐ migrating", YELLOW)
+            t.append("  ").append(ev.phase, style=f"bold {FG}")
+            if ev.detail:
+                t.append(f"  {ev.detail}", style=SUB)
+            self._state(t)
         elif isinstance(ev, Stats):
             if not self.transferring:  # inventory scan, not transfer progress
-                self._now(Text(f"scanning {ev.done:,}/{ev.total:,} items", style=DIM))
+                self._now(Text.assemble(theme.pill("scan", SURFACE1, fg=FG), "  ",
+                                        (f"{ev.done:,}/{ev.total:,} items", SUB)))
                 return
             self.stats = ev
             self.summary = f"{100 * ev.done // max(ev.total, 1)}% · {ev.done:,}/{ev.total:,}"
             self._redraw_stats()
         elif isinstance(ev, ItemStarted):
-            self._now(Text.assemble(("now  ", DIM), (f"{ev.index:,}/{ev.total:,}  ", DIM), (ev.rel_path, FG),
-                                    (f"  {theme.size(ev.size)}", DIM)))
+            self._now(Text.assemble(theme.pill("start", BLUE), "  ", (f"{ev.index:,}/{ev.total:,}  ", SUB),
+                                    (ev.rel_path, FG), (f"  {theme.size(ev.size)}", SUB)))
         elif isinstance(ev, ItemStep):
-            self._now(Text.assemble(("now  ", DIM), (f"{ev.step:<9}", f"bold {ACCENT}"), (ev.rel_path, FG)))
+            self._now(Text.assemble(theme.pill(ev.step, STEP_COLOR.get(ev.step, MAUVE)), "  ", (ev.rel_path, FG)))
         elif isinstance(ev, Throttled):
             self._throttle_until = time.monotonic() + ev.seconds
             banner = self.query_one("#throttle", Static)
-            banner.update(Text(f" ⚠ throttled by SharePoint: waiting {ev.seconds:.0f}s (attempt {ev.attempt}) "
+            banner.update(Text(f" ⚠ throttled by SharePoint · waiting {ev.seconds:.0f}s · attempt {ev.attempt} "
                                f"· {ev.what}"))
             banner.display = True
 
@@ -375,24 +401,21 @@ class RunSection(Section):
             Text(f"{theme.size(s.bytes_done)} / {theme.size(s.bytes_total)}" if s else "", style=FG))
         elapsed = time.monotonic() - self.started_at if self.started_at else None
         cells = [
-            ("files", f"{s.done:,}/{s.total:,}" if s else "-", FG),
-            ("bytes", theme.size(s.bytes_done) if s else "-", FG),
-            ("speed", f"{s.mbps:.2f} MB/s" if s else "-", FG),
-            ("ETA", theme.duration(s.eta_s) if s else "-", FG),
-            ("elapsed", theme.duration(elapsed) if elapsed is not None else "-", FG),
-            ("failed", f"{s.failed:,}" if s else "-", f"bold {RED}" if s and s.failed else FG),
-            ("warnings", f"{s.warnings:,}" if s else "-", YELLOW if s and s.warnings else FG),
+            ("files", f"{s.done:,}/{s.total:,}" if s else "–", FG),
+            ("copied", theme.size(s.bytes_done) if s else "–", FG),
+            ("speed", f"{s.mbps:.2f} MB/s" if s else "–", BLUE if s else FG),
+            ("ETA", theme.duration(s.eta_s) if s else "–", FG),
+            ("elapsed", theme.duration(elapsed) if elapsed is not None else "–", FG),
+            ("failed", f"{s.failed:,}" if s else "–", RED if s and s.failed else FG),
+            ("warnings", f"{s.warnings:,}" if s else "–", YELLOW if s and s.warnings else FG),
             ("workers", str(self.m365.opts.workers), FG),
         ]
-        grid = Table.grid(padding=(0, 3), expand=False)
+        grid = Table.grid(expand=True, padding=(0, 1))
         for _ in range(4):
-            grid.add_column(style=DIM, no_wrap=True)
-            grid.add_column(no_wrap=True, min_width=14)
-        for row in (cells[:4], cells[4:]):
-            out: list[Text] = []
-            for label, value, style in row:
-                out += [Text(label), Text(value, style=style)]
-            grid.add_row(*out)
+            grid.add_column(ratio=1)
+        grid.add_row(*[tile(*c) for c in cells[:4]])
+        grid.add_row("", "", "", "")  # boxes never touch
+        grid.add_row(*[tile(*c) for c in cells[4:]])
         self.query_one("#run-stats", Static).update(grid)
 
     def _state(self, text: Text) -> None:

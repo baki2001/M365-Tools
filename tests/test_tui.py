@@ -185,7 +185,7 @@ async def test_audit_shows_findings_and_blocking_count_then_migrate_demands_forc
         checks = app.screen.query_one("#checks")
         table = app.screen.query_one("#findings", DataTable)
         assert table.row_count == len(checks.findings) > 0
-        assert str(table.get_row_at(0)[1]) == "blocking"
+        assert str(table.get_row_at(0)[0]) == "● blocking"
         assert "1 blocking" in sidebar_text(app, 1) and "✗" in sidebar_text(app, 1)
         # enter opens the detail panel, esc closes it
         assert app.screen.focused is table  # a moved focus to the results

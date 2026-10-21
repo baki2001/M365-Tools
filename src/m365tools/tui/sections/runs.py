@@ -19,12 +19,9 @@ from m365tools.core.paths import runs_dir
 
 from .. import theme
 from ..modals import TextModal
-from ..theme import ACCENT, DIM, FG
+from ..theme import FG, MODE_STYLE, SUB
 from ..widgets import VimTable
 from .base import Empty, Section
-
-MODE_STYLE = {"audit": ACCENT, "dryrun": theme.CYAN, "migrate": theme.GREEN, "verify": theme.MAGENTA,
-              "lock": theme.YELLOW}
 
 
 @dataclass(slots=True)
@@ -91,6 +88,7 @@ def list_all_runs() -> list[RunInfo]:
 
 class RunsSection(Section):
     KEY, TITLE, NUMBER = "runs", "Runs", 7
+    TAGLINE, IDLE = "every run folder, newest first", "none yet · r reloads"
     PRIMARY = "#runs-table"
     HELP = ("Every run folder under the runs directory, newest first. enter opens report.txt; o shows the "
             "path of report.html; r re-reads the folder.")
@@ -107,15 +105,11 @@ class RunsSection(Section):
     def compose(self) -> ComposeResult:
         yield Static("", id="runs-head", classes="counts")
         yield VimTable(id="runs-table")
-        yield Empty("No runs yet. Every audit, dry run, migration, verify and lock leaves a folder here.",
-                    id="runs-empty")
+        yield Empty(theme.empty_text("No runs yet", "Every audit, dry run, migration, verify and lock leaves a "
+                                     "folder here.", [("a", "audit"), ("r", "reload")]), id="runs-empty")
 
     def on_mount(self) -> None:
-        table = self.query_one(VimTable)
-        table.add_column("when", width=16)
-        table.add_column("mode", width=8)
-        table.add_column("profile", width=20)
-        table.add_column("summary")
+        self.query_one(VimTable).add_fit_columns(("when", 16), ("mode", 10), ("profile", 20), ("summary", None))
         self.action_reload()
 
     def on_show(self) -> None:
@@ -128,16 +122,17 @@ class RunsSection(Section):
         table.clear()
         for r in self.runs:
             table.add_row(Text(f"{r.started:%Y-%m-%d %H:%M}" if r.started else r.path.name, style=FG),
-                          Text(r.mode, style=MODE_STYLE.get(r.mode, FG)), Text(r.profile, style=FG),
-                          Text(r.summary, style=DIM))
+                          theme.glyph_word(r.mode, MODE_STYLE.get(r.mode, SUB)),
+                          Text(r.profile, style=FG, no_wrap=True, overflow="ellipsis"),
+                          Text(r.summary, style=SUB, no_wrap=True, overflow="ellipsis"))
         if self.runs:
             table.move_cursor(row=min(row, len(self.runs) - 1))
         self.query_one(VimTable).display = bool(self.runs)
         self.query_one("#runs-empty").display = not self.runs
-        self.query_one("#runs-head", Static).update(
-            Text.assemble((f"{len(self.runs)} run(s) in ", DIM), (str(runs_dir()), FG)))
+        self.query_one("#runs-head", Static).update(Text.assemble(
+            theme.pill(f"{len(self.runs)} run(s)", theme.BLUE), ("  in ", SUB), (str(runs_dir()), FG)))
         self.status = theme.DONE if self.runs else theme.TODO
-        self.summary = f"{len(self.runs)} run(s)" if self.runs else "none yet"
+        self.summary = f"{len(self.runs)} run(s)" if self.runs else ""
 
     def _current(self) -> RunInfo | None:
         row = self.query_one(VimTable).cursor_row
