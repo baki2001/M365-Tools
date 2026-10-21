@@ -51,7 +51,8 @@ src/m365tools/
     lock.py        preview_lock(gw, lib, include_owners) / apply_lock(gw, lib, changes, sink)
     usermap.py     build_usermap(src_inv, dst_gw), save_usermap/load_usermap, UserMap (resolve(email))
     job.py         Job, RestGatewayFactory, BlockingFindingsError  — the only thing UI calls
-  tui/             Textual app (screens: home, source, destination, options, audit, plan, migrate, verify, lock)
+  tui/             Textual app: one Workspace screen (sidebar + 7 sections: job, checks, plan, run, verify, lock,
+                   runs), keyboard-only modals, command palette; calls only Job + services
   cli.py           typer app `m365`:
                      m365 tenant  add | list | login | setup-help
                      m365 profile list | show

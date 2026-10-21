@@ -1,167 +1,300 @@
+/* One theme ("m365", see theme.py). Focused pane: heavy accent border. Everything else: thin, dim. */
+
 Screen {
+    background: $background;
     layout: vertical;
 }
 
-.section-title {
-    text-style: bold;
-    color: $accent;
-    margin: 1 0 0 1;
+#header {
+    height: 1;
+    background: $panel;
 }
 
-.field-title {
-    text-style: bold;
-    margin: 1 0 0 1;
+#body {
+    height: 1fr;
+}
+
+#keybar {
+    height: 1;
+    background: $panel;
+}
+
+/* ---------------------------------------------------------------- panes */
+
+#sidebar {
+    width: 30%;
+    max-width: 44;
+    min-width: 26;
+    height: 1fr;
+    border: round $panel-lighten-2;
+    border-title-color: $text-muted;
+    background: $background;
+    padding: 0;
+}
+
+#sidebar:focus {
+    border: heavy $accent;
+    border-title-color: $accent;
+    border-title-style: bold;
+}
+
+#sidebar > .option-list--option {
+    padding: 0 0 1 0;
+}
+
+#sidebar > .option-list--option-highlighted {
+    background: $panel;
+}
+
+#sidebar:focus > .option-list--option-highlighted {
+    background: $accent 25%;
+}
+
+#main {
+    width: 1fr;
+    height: 1fr;
+    border: round $panel-lighten-2;
+    border-title-color: $text-muted;
+    padding: 0 1;
+}
+
+#main:focus-within {
+    border: heavy $accent;
+    border-title-color: $accent;
+    border-title-style: bold;
+}
+
+#switcher, .section {
+    height: 1fr;
+}
+
+/* ---------------------------------------------------------------- common section parts */
+
+.counts {
+    height: auto;
+    margin: 0 0 1 0;
+}
+
+.totals {
+    height: 1;
+    margin: 1 0 0 0;
 }
 
 .hint {
+    height: auto;
+    margin: 1 0 0 0;
+}
+
+DataTable {
+    height: 1fr;
+    background: $background;
+    scrollbar-size-vertical: 1;
+}
+
+DataTable > .datatable--header {
+    background: $background;
     color: $text-muted;
-    margin: 0 1;
+    text-style: bold;
 }
 
-.row {
-    height: auto;
-    margin: 0 1;
+DataTable > .datatable--cursor {
+    background: $panel;
 }
 
-.field-label {
-    width: 16;
-    padding: 1 1 0 0;
+DataTable:focus > .datatable--cursor {
+    background: $accent 30%;
+    text-style: bold;
 }
 
-.field-label.wide {
-    width: 50;
-}
-
-Input.short {
-    width: 12;
-}
-
-.buttons {
-    height: auto;
-    margin: 1 1 0 1;
-}
-
-.buttons Button, .buttons Checkbox {
-    margin-right: 1;
-}
-
-#profiles {
-    height: 1fr;
-    margin: 0 1;
-    border: round $primary;
-}
-
-#home-body {
+.split {
     height: 1fr;
 }
 
-#hits {
-    height: 8;
-    margin: 0 1;
-    border: round $primary-darken-2;
-}
-
-#libraries {
-    height: 8;
-    margin: 0 1;
-}
-
-#tenant-table {
+.detail {
+    width: 45%;
     height: 1fr;
-    margin: 0 1;
+    border: round $accent;
+    border-title-color: $accent;
+    padding: 0 1;
+    margin-left: 1;
 }
 
-#tenant-form {
-    grid-size: 2;
-    grid-columns: 16 1fr;
-    grid-rows: 3;
+/* ---------------------------------------------------------------- job cards */
+
+.card {
     height: auto;
-    margin: 0 1;
+    border: round $panel-lighten-2;
+    border-title-color: $text-muted;
+    padding: 0 1;
+    margin: 0 0 1 0;
 }
 
-#tenant-form Label {
-    padding: 1 0 0 0;
+.card:focus {
+    border: heavy $accent;
+    border-title-color: $accent;
+    border-title-style: bold;
 }
 
-#excludes {
-    height: 6;
-    margin: 0 1;
+/* ---------------------------------------------------------------- run dashboard */
+
+.run-state {
+    height: auto;
+    margin: 0 0 1 0;
 }
 
-#overwrite {
-    margin: 0 1;
+.banner {
+    height: 1;
+    background: $warning;
+    color: $background;
+    text-style: bold;
+    margin: 0 0 1 0;
 }
 
-#findings, #entries, #rows, #changes {
-    height: 1fr;
-    margin: 0 1;
-}
-
-#phase, #throttle, #counts, #stats, #current, #target, #endpoints {
-    margin: 0 1;
+#dash {
     height: auto;
 }
 
-#throttle {
-    color: $warning;
+.bar-row {
+    height: 1;
 }
 
-#progress {
-    margin: 1 1 0 1;
+.bar-label {
+    width: 7;
+    color: $text-muted;
+}
+
+.bar-count {
+    width: 24;
+    padding-left: 2;
+}
+
+.bar-row ProgressBar {
+    width: 1fr;
+}
+
+.bar-row Bar {
+    width: 1fr;
+}
+
+Bar > .bar--bar {
+    color: $accent;
+    background: $panel;
+}
+
+Bar > .bar--complete {
+    color: $success;
+}
+
+.stats {
+    height: auto;
+    margin: 1 0 0 0;
+}
+
+.now {
+    height: 1;
+    margin: 1 0 1 0;
 }
 
 #log {
     height: 1fr;
-    margin: 0 1;
-    border: round $primary-darken-2;
+    min-height: 5;
+    border-top: solid $panel-lighten-2;
+    background: $background;
+    scrollbar-size-vertical: 1;
 }
 
-#log.log-small {
-    height: 7;
+#log:focus {
+    border-top: solid $accent;
 }
 
-#runs {
-    height: 1fr;
-    margin: 0 1;
+#run.-biglog #dash {
+    display: none;
 }
 
-#summary {
-    margin: 1 2;
-    height: auto;
-}
-
-.endpoint, .options {
-    height: 1fr;
-}
+/* ---------------------------------------------------------------- modals */
 
 ModalScreen {
     align: center middle;
+    background: $background 60%;
 }
 
 .dialog {
-    width: 80;
+    width: 76;
     max-width: 95%;
     height: auto;
     max-height: 90%;
-    border: thick $accent;
-    background: $panel;
+    border: heavy $accent;
+    border-title-color: $accent;
+    border-title-style: bold;
+    border-subtitle-color: $text-muted;
+    background: $surface;
     padding: 1 2;
 }
 
 .dialog.wide {
-    width: 110;
-    height: 90%;
+    width: 100;
 }
 
-.dialog-title {
-    text-style: bold;
-    margin-bottom: 1;
+.dialog.picker {
+    width: 100;
+    height: 70%;
 }
 
-.dialog .buttons {
+.dialog.viewer {
+    width: 90%;
+    height: 85%;
+}
+
+.dialog Input {
+    border: tall $panel-lighten-2;
+    background: $background;
     margin: 1 0 0 0;
 }
 
-#library-label {
-    padding: 1 0 0 0;
+.dialog Input:focus {
+    border: tall $accent;
+}
+
+.dialog OptionList {
+    height: 1fr;
+    border: none;
+    background: $surface;
+    margin: 1 0 0 0;
+}
+
+.dialog OptionList > .option-list--option-highlighted {
+    background: $accent 30%;
+    text-style: bold;
+}
+
+#options-list {
+    height: auto;
+    max-height: 12;
+}
+
+#options-help, #picker-status, .error-line, .ask {
+    height: auto;
+    margin: 1 0 0 0;
+}
+
+#viewer {
+    height: 1fr;
+}
+
+PromptModal.-bottom {
+    align: center bottom;
+    background: transparent;
+}
+
+PromptModal.-bottom .dialog {
+    width: 100%;
+    max-width: 100%;
+    padding: 0 1;
+    margin: 0 0 1 0;
+}
+
+/* ---------------------------------------------------------------- toasts */
+
+Toast {
+    background: $panel;
 }

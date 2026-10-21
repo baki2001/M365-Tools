@@ -49,9 +49,13 @@ Your login is cached, so you won't be asked again for a while.
 m365
 ```
 
-Pick the tenant, type part of the site name, pick the site and the library. Do the same for the
-destination. The screen then walks you through **audit → dry run → migrate → verify**. Nothing is
-written to SharePoint until you confirm the migrate step.
+One keyboard-driven screen: sections on the left (**1 Job, 2 Checks, 3 Plan, 4 Run, 5 Verify, 6 Lock,
+7 Runs**, each with a ○ ◐ ● ✗ state and a one-line summary), the selected section on the right, and the
+keys that work right now in the bottom bar. In **Job**, press `e` on Source and Destination to pick tenant,
+site (type to search), library and folder; `o` edits options, `s`/`p` save/load a profile. Then `a` audit,
+`d` dry run, `m` migrate (asks first; type `force` if the audit found blocking problems), `v` verify.
+Move with `1`-`7`, `j`/`k`, `tab` (sidebar ↔ main), `esc` back; `:` command palette, `?` all keys,
+`ctrl+l` sign in, `q` quit. Nothing is written to SharePoint until you confirm the migrate step.
 
 ### The scripted way: commands
 
