@@ -8,7 +8,7 @@ but take no client argument: a gateway is bound to one ``SpClient`` and one site
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -62,7 +62,9 @@ class SpGateway(Protocol):
     async def get_library(self, name: str) -> LibraryRef: ...
     def iter_items(self, lib: LibraryRef) -> AsyncIterator[dict[str, Any]]: ...
     def build_item(self, raw: dict[str, Any], lib: LibraryRef, base_url: str) -> Item | None: ...
-    def iter_unique_permission_ids(self, lib: LibraryRef) -> AsyncIterator[int]: ...
+    def iter_unique_permission_ids(
+        self, lib: LibraryRef, on_page: Callable[[int], None] | None = None
+    ) -> AsyncIterator[int]: ...
     async def ensure_folder(self, server_relative_folder: str) -> None: ...
     async def download_file(self, server_relative_url: str, dest_path: Path) -> None: ...
     async def upload_file(
@@ -139,8 +141,10 @@ class RestGateway:
     def build_item(self, raw: dict[str, Any], lib: LibraryRef, base_url: str) -> Item | None:
         return self._sp().build_item(raw, base_url)
 
-    async def iter_unique_permission_ids(self, lib: LibraryRef) -> AsyncIterator[int]:
-        async for item_id in self._sp().iter_unique_permission_ids(self.client, lib):
+    async def iter_unique_permission_ids(
+        self, lib: LibraryRef, on_page: Callable[[int], None] | None = None
+    ) -> AsyncIterator[int]:
+        async for item_id in self._sp().iter_unique_permission_ids(self.client, lib, on_page=on_page):
             yield int(item_id)
 
     async def ensure_folder(self, server_relative_folder: str) -> None:

@@ -11,15 +11,18 @@ from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.widgets import Static
 
+from m365tools.core.events import DRYRUN_PHASES
 from m365tools.tools.spmig.models import Action, Plan, PlanEntry
 
 from .. import theme
 from ..modals import PromptModal
 from ..theme import ACTION_LABEL, ACTION_STYLE, FG, MAUVE, SUB
-from ..widgets import Activity, VimTable
+from ..widgets import StepList, VimTable
 from .base import Empty, Section
 
 MAX_ROWS = 20_000
+# The dry-run engine walk (folders/files) and the report are part of computing the plan.
+DRYRUN_ALIASES = {"folders": "plan", "files": "plan", "finalize": "plan", "report": "plan"}
 FILTERS: tuple[str | None, ...] = (None, *(a.value for a in Action))
 
 
@@ -43,7 +46,7 @@ class PlanSection(Section):
         self.filter_text = ""
 
     def compose(self) -> ComposeResult:
-        yield Activity()
+        yield StepList(DRYRUN_PHASES, aliases=DRYRUN_ALIASES)
         yield Static("", id="plan-counts", classes="counts")
         yield VimTable(id="plan-table")
         yield Static("", id="plan-totals", classes="totals")
@@ -71,8 +74,13 @@ class PlanSection(Section):
                                                      else "")
         self._redraw()
 
+    def run_state_changed(self) -> None:
+        self._redraw()
+
     def reset(self) -> None:
         super().reset()
+        if self.steps is not None and not self.steps.running:
+            self.steps.clear()
         self.plan = None
         self._redraw()
 
@@ -86,7 +94,8 @@ class PlanSection(Section):
         has = plan is not None
         for sel in ("#plan-counts", "#plan-table", "#plan-totals"):
             self.query_one(sel).display = has
-        self.query_one("#plan-empty").display = not has
+        steps = self.steps
+        self.query_one("#plan-empty").display = not has and not (steps is not None and steps.running)
         if plan is None:
             return
         counts = {a.value: n for a, n in plan.counts().items()}

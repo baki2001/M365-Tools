@@ -36,6 +36,7 @@ from m365tools.core.events import (
     ProgressEvent,
     Stats,
     Throttled,
+    phase_label,
 )
 from m365tools.services import list_runs, load_run_options
 from m365tools.tools.spmig.job import BlockingFindingsError
@@ -352,16 +353,17 @@ class RunSection(Section):
     def on_job_event(self, ev: ProgressEvent) -> None:
         if isinstance(ev, PhaseChanged):
             self.phase = ev.phase
-            self.summary = ev.phase
+            self.summary = phase_label(ev.phase)
             t = state_line("◐ migrating", YELLOW)
-            t.append("  ").append(ev.phase, style=f"bold {FG}")
+            t.append("  ").append(phase_label(ev.phase), style=f"bold {FG}")
             if ev.detail:
                 t.append(f"  {ev.detail}", style=SUB)
             self._state(t)
         elif isinstance(ev, Stats):
             if not self.transferring:  # inventory scan, not transfer progress
-                self._now(Text.assemble(theme.pill("scan", SURFACE1, fg=FG), "  ",
-                                        (f"{ev.done:,}/{ev.total:,} items", SUB)))
+                unit = {"users": "users", "checks": "checks"}.get(self.phase, "items")
+                self._now(Text.assemble(theme.pill("scan", SURFACE1, fg=FG), "  ", (phase_label(self.phase), FG),
+                                        (f"  {ev.done:,}/{ev.total:,} {unit}", SUB)))
                 return
             self.stats = ev
             self.summary = f"{100 * ev.done // max(ev.total, 1)}% · {ev.done:,}/{ev.total:,}"

@@ -13,13 +13,14 @@ from textual.binding import Binding, BindingType
 from textual.containers import Horizontal
 from textual.widgets import DataTable, Static
 
+from m365tools.core.events import AUDIT_PHASES
 from m365tools.services import SEVERITY_ORDER, sorted_findings
 from m365tools.tools.spmig.models import Finding, RunSummary
 
 from .. import theme
 from ..modals import PromptModal
 from ..theme import DIM, FG, SEVERITY_STYLE, SUB
-from ..widgets import Activity, VimScroll, VimTable
+from ..widgets import StepList, VimScroll, VimTable
 from .base import Empty, Section
 
 
@@ -58,7 +59,7 @@ class ChecksSection(Section):
         self.detail_open = False
 
     def compose(self) -> ComposeResult:
-        yield Activity()
+        yield StepList(AUDIT_PHASES)
         yield Static("", id="checks-counts", classes="counts")
         with Horizontal(classes="split"):
             yield VimTable(id="findings")
@@ -97,8 +98,13 @@ class ChecksSection(Section):
             f"no blocking · {warn} warn" if warn else "all clear")
         self._redraw()
 
+    def run_state_changed(self) -> None:
+        self._redraw()
+
     def reset(self) -> None:
         super().reset()
+        if self.steps is not None and not self.steps.running:
+            self.steps.clear()
         self.findings, self.run_dir = [], None
         self._redraw()
 
@@ -124,7 +130,8 @@ class ChecksSection(Section):
         has = bool(self.findings)
         self.query_one(".split").display = has
         self.query_one("#checks-counts").display = has
-        self.query_one("#checks-empty").display = not has
+        steps = self.steps
+        self.query_one("#checks-empty").display = not has and not (steps is not None and steps.running)
         self._update_detail()
 
     def _update_detail(self) -> None:

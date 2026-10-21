@@ -10,8 +10,12 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from .gateway import SpGateway
+from m365tools.core.events import EventSink, PhaseChanged, Stats, null_sink
+
+from .gateway import SiteUser, SpGateway
 from .models import Inventory, UserMapEntry
+
+ResolvedUsers = dict[str, SiteUser | None]  # lower-cased source email -> destination site user (None = unknown)
 
 CSV_COLUMNS = ["source_email", "target_email", "display_name", "status"]
 _VALID_STATUS = {"auto", "mapped", "unmapped"}
@@ -34,13 +38,35 @@ def collect_users(inv: Inventory) -> dict[str, tuple[str, int]]:
     return out
 
 
-async def build_usermap(src_inv: Inventory, dst_gw: SpGateway) -> list[UserMapEntry]:
+async def resolve_users(
+    emails: list[str], dst_gw: SpGateway, sink: EventSink = null_sink, *, phase: str = "users"
+) -> ResolvedUsers:
+    """Look every (distinct) email up at the destination once, emitting ``PhaseChanged(phase)`` and
+    ``Stats(resolved, distinct)`` progress. The result feeds :func:`build_usermap` and the users check."""
+    distinct = sorted({e.strip().lower() for e in emails if e and e.strip()})
+    n = len(distinct)
+    sink(PhaseChanged(phase, f"{n:,} distinct author(s)/editor(s)"))
+    out: ResolvedUsers = {}
+    step = max(1, n // 100)
+    for i, email in enumerate(distinct, 1):
+        out[email] = await dst_gw.find_site_user(email)
+        if i % step == 0 or i == n:
+            sink(Stats(done=i, total=n, bytes_done=0, bytes_total=0, mbps=0.0, eta_s=None, failed=0, warnings=0))
+    if n == 0:
+        sink(Stats(done=0, total=0, bytes_done=0, bytes_total=0, mbps=0.0, eta_s=None, failed=0, warnings=0))
+    return out
+
+
+async def build_usermap(
+    src_inv: Inventory, dst_gw: SpGateway, resolved: ResolvedUsers | None = None
+) -> list[UserMapEntry]:
     """Propose a mapping: same email known at destination => ``auto``; else a unique match on the local part
-    (if the gateway offers ``find_users_by_local_part``) => ``auto``; else ``unmapped``."""
+    (if the gateway offers ``find_users_by_local_part``) => ``auto``; else ``unmapped``. ``resolved`` (from
+    :func:`resolve_users`) avoids looking the same email up again."""
     by_local = getattr(dst_gw, "find_users_by_local_part", None)
     entries: list[UserMapEntry] = []
     for email, (name, _count) in sorted(collect_users(src_inv).items()):
-        hit = await dst_gw.find_site_user(email)
+        hit = resolved[email] if resolved is not None and email in resolved else await dst_gw.find_site_user(email)
         if hit is not None:
             entries.append(UserMapEntry(email, hit.email or email, name or hit.title, "auto"))
             continue

@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from m365tools.core.errors import AccessDeniedError, NotFoundError
-from m365tools.core.events import EventSink, LogLine, PhaseChanged, null_sink
+from m365tools.core.events import EventSink, LogLine, PhaseChanged, Stats, null_sink
 
 from .gateway import SpGateway
 from .inventory import inventory_base
@@ -28,7 +28,7 @@ from .models import (
     Severity,
 )
 from .plan import ROUTE_UNAVAILABLE, is_excluded
-from .usermap import UserMap, collect_users
+from .usermap import ResolvedUsers, UserMap, collect_users
 
 MB = 1024 * 1024
 ESTIMATE_MBPS = 0.7
@@ -71,6 +71,7 @@ class CheckContext:
     dst_gw: SpGateway | None
     usermap: UserMap | None = None
     dst_error: str | None = None  # why the destination library could not be resolved
+    resolved_users: ResolvedUsers | None = None  # pre-resolved destination users (Job's "users" phase)
 
     @property
     def dst_base(self) -> str | None:
@@ -310,7 +311,10 @@ async def check_users(ctx: CheckContext) -> list[Finding]:
     for email, (name, count) in sorted(collect_users(inv).items()):
         if ctx.usermap is not None and ctx.usermap.resolve(email):
             continue
-        if await ctx.dst_gw.find_site_user(email) is not None:
+        if ctx.resolved_users is not None and email in ctx.resolved_users:
+            if ctx.resolved_users[email] is not None:
+                continue
+        elif await ctx.dst_gw.find_site_user(email) is not None:
             continue
         who = f"{name} <{email}>" if name else email
         out.append(Finding(
@@ -431,10 +435,13 @@ _ORDER = {Severity.BLOCKING: 0, Severity.WARN: 1, Severity.INFO: 2}
 
 async def run_checks(ctx: CheckContext, sink: EventSink = null_sink) -> list[Finding]:
     """Run every rule; a rule that crashes becomes a WARN finding instead of aborting the audit."""
-    sink(PhaseChanged("checks"))
     findings: list[Finding] = []
-    for check in CHECKS:
+    n = len(CHECKS)
+    sink(PhaseChanged("checks", f"{n} checks"))
+    for i, check in enumerate(CHECKS):
         name = check.__name__.removeprefix("check_")
+        sink(PhaseChanged("checks", name.replace("_", " ")))
+        sink(Stats(done=i, total=n, bytes_done=0, bytes_total=0, mbps=0.0, eta_s=None, failed=0, warnings=0))
         try:
             findings.extend(await check(ctx))
         except Exception as exc:  # noqa: BLE001
@@ -443,6 +450,7 @@ async def run_checks(ctx: CheckContext, sink: EventSink = null_sink) -> list[Fin
                 Severity.WARN, "check_failed", name, f"The '{name}' check could not run: {exc}",
                 "Re-run the audit; if it keeps failing, check this point manually.",
             ))
+    sink(Stats(done=n, total=n, bytes_done=0, bytes_total=0, mbps=0.0, eta_s=None, failed=0, warnings=0))
     findings.sort(key=lambda f: _ORDER[f.severity])
     counts = {s: sum(1 for f in findings if f.severity == s) for s in Severity}
     sink(LogLine("warn" if counts[Severity.BLOCKING] else "info",

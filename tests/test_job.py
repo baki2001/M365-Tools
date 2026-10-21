@@ -104,3 +104,54 @@ async def test_unresolvable_route_destination_blocks_and_never_copies_to_main(tm
     summary = await job.migrate(force=True)
     assert summary.copied == 2
     assert dst.file("0. Archief/2019/old.pdf") is None  # not dumped into the main library
+
+
+async def test_audit_emits_phase_sequence_with_progress_and_elapsed_log(tmp_path):
+    from m365tools.core.events import AUDIT_PHASES, LogLine, PhaseChanged, Stats
+
+    src, dst = setup()
+    job = make_job(tmp_path, src, dst)
+    await job.audit()
+    events = job._clock.inner.events
+    phases: list[str] = []
+    for ev in events:
+        if isinstance(ev, PhaseChanged) and (not phases or phases[-1] != ev.phase):
+            phases.append(ev.phase)
+    assert tuple(phases) == AUDIT_PHASES
+    # one "<label>: ... (+1.2s)" info line per phase start
+    starts = [ev for ev in events if isinstance(ev, LogLine) and ev.phase]
+    assert [ev.phase for ev in starts] == phases
+    assert starts[1].text.startswith("permissions scan: 6 items (+") and starts[1].text.endswith("s)")
+
+    def stats_in(phase: str) -> list[Stats]:
+        cur, out = None, []
+        for ev in events:
+            if isinstance(ev, PhaseChanged):
+                cur = ev.phase
+            elif isinstance(ev, Stats) and cur == phase:
+                out.append(ev)
+        return out
+
+    assert stats_in("permissions.source")[-1].done == stats_in("permissions.source")[-1].total == 6
+    assert (stats_in("users")[-1].done, stats_in("users")[-1].total) == (2, 2)
+    checks = stats_in("checks")
+    assert checks[-1].done == checks[-1].total and checks[0].done == 0
+    check_names = [ev.detail for ev in events if isinstance(ev, PhaseChanged) and ev.phase == "checks"]
+    assert "write access" in check_names
+    # each distinct author is looked up once (shared by the users check and the user-map proposal) and the
+    # destination is not scanned for unique permissions
+    lookups = [c for c in dst.calls if c[0] == "find_site_user"]
+    assert sorted(c[1] for c in lookups) == ["gone.user@contoso.com", "jan@contoso.com"]
+    assert not [c for c in dst.calls if c[0] == "iter_unique_permission_ids"]
+    assert (job.run_dir / "usermap.csv").exists()
+
+
+async def test_dryrun_phases(tmp_path):
+    from m365tools.core.events import DRYRUN_PHASES, PhaseChanged
+
+    src, dst = setup()
+    job = make_job(tmp_path, src, dst)
+    await job.dryrun()
+    seen = [ev.phase for ev in job._clock.inner.events if isinstance(ev, PhaseChanged)]
+    firsts = [p for i, p in enumerate(seen) if p in DRYRUN_PHASES and p not in seen[:i]]
+    assert tuple(firsts) == DRYRUN_PHASES

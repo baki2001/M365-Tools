@@ -125,7 +125,9 @@ async def test_iter_unique_permission_ids(fake_client, respx_mock: respx.MockRou
     respx_mock.get(url__startswith=f"{LIST_API}/items").respond(
         json={"value": [{"Id": 1, "HasUniqueRoleAssignments": False}, {"Id": 4, "HasUniqueRoleAssignments": True}]}
     )
-    assert [i async for i in sp.iter_unique_permission_ids(fake_client, lib())] == [4]
+    pages: list[int] = []
+    assert [i async for i in sp.iter_unique_permission_ids(fake_client, lib(), on_page=pages.append)] == [4]
+    assert pages and pages[0] == 2  # progress callback gets the row count of every scanned page
 
 
 def test_build_item_file_folder_outside() -> None:

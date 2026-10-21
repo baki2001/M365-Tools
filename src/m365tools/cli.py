@@ -38,6 +38,7 @@ from m365tools.core.config import (
 )
 from m365tools.core.errors import ConfigError, M365Error
 from m365tools.core.events import (
+    SCAN_PHASES,
     AuthPrompt,
     ItemStarted,
     ItemStep,
@@ -46,8 +47,9 @@ from m365tools.core.events import (
     ProgressEvent,
     Stats,
     Throttled,
+    phase_label,
 )
-from m365tools.core.report.format import fmt_duration, fmt_size
+from m365tools.core.report.format import fmt_duration, fmt_elapsed, fmt_size
 from m365tools.services import (
     SEVERITY_ORDER,
     TenantClients,
@@ -148,6 +150,7 @@ class ConsoleRenderer:
         self._tasks: dict[str, Any] = {}
         self._last_plain = 0.0
         self._last_done = -1
+        self._t0 = time.monotonic()
 
     # -------------------------------------------------------------------------------------------- live
 
@@ -194,14 +197,21 @@ class ConsoleRenderer:
         elif isinstance(ev, LogLine):
             if self.quiet and ev.level not in ("warn", "error"):
                 return
-            if ev.level == "debug":
+            if ev.level == "debug" or ev.phase:  # phase-start lines: the ▸ line below already says it
                 return
             self.console.print(Text(f"{ev.level:>5}  ", style=LEVEL_STYLE.get(ev.level, "") or "dim")
                                + Text(ev.text, style=LEVEL_STYLE.get(ev.level, "")))
         elif isinstance(ev, PhaseChanged):
-            self.status.phase, self.status.current = ev.phase, ""
-            if not self.quiet:
-                self.console.print(Text(f"▸ {ev.phase}" + (f"  {ev.detail}" if ev.detail else ""), style=ACCENT))
+            if ev.phase == self.status.phase:  # same phase, new sub-step (e.g. the next check)
+                self.status.current = ev.detail
+            else:
+                self.status.phase, self.status.current = ev.phase, ""
+                if not self.quiet:
+                    line = Text(f"▸ {phase_label(ev.phase):<22}", style=ACCENT)
+                    if ev.detail:
+                        line.append(f" {ev.detail}")
+                    line.append(f"  +{fmt_elapsed(time.monotonic() - self._t0)}", style="dim")
+                    self.console.print(line)
         elif isinstance(ev, Throttled):
             self.status.throttle = f"throttled, waiting {ev.seconds:.0f}s (attempt {ev.attempt}) - {ev.what}"
             self.status.throttle_until = time.monotonic() + ev.seconds
@@ -217,11 +227,13 @@ class ConsoleRenderer:
             self.live.refresh()
 
     def _stats(self, s: Stats) -> None:
-        if self.status.phase == "inventory":  # item scan, not transfer progress
-            self.status.current = f"scanning {s.done:,}/{s.total:,} items"
+        if self.status.phase in SCAN_PHASES:  # pre-phase progress, not transfer progress
+            unit = {"users": "users", "checks": "checks"}.get(self.status.phase, "items")
+            self.status.current = f"{s.done:,}/{s.total:,} {unit}"
             if self.live is None and not self.quiet and time.monotonic() - self._last_plain >= 10:
                 self._last_plain = time.monotonic()
-                self.console.print(Text(f"inventory {s.done:,}/{s.total:,} items", style="dim"))
+                self.console.print(Text(f"  {phase_label(self.status.phase)} {s.done:,}/{s.total:,} {unit}",
+                                        style="dim"))
             return
         eta = fmt_duration(s.eta_s) if s.eta_s is not None else "--:--:--"
         if self.progress is not None:

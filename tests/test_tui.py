@@ -324,3 +324,54 @@ async def test_run_dashboard_updates_from_stats_and_pause_resume():
         assert job.calls[-1] == "migrate:/tmp/fake-migrate"
         assert (run.result.copied, run.result.skipped) == (3, 0)  # legs added up
         assert app.screen.query_one("#files-bar", ProgressBar).progress == 3
+
+
+class GatedAuditJob:
+    """audit() walks the first two phases, then waits until the test releases it."""
+
+    instances: ClassVar[list[GatedAuditJob]] = []
+
+    def __init__(self, _gateways: Any, opts: Any, sink: Any, _run_dir_factory: Any = None) -> None:
+        self.opts, self.sink, self.run_dir = opts, sink, None
+        self.gate = asyncio.Event()
+        GatedAuditJob.instances.append(self)
+
+    async def audit(self) -> RunSummary:
+        self.sink(PhaseChanged("inventory.source", "source: /sites/src/Docs"))
+        self.sink(Stats(102_149, 102_149, 2_400 * 1024**2, 0, 0.0, None, 0, 0))
+        self.sink(PhaseChanged("permissions.source", "102,149 items"))
+        self.sink(Stats(45_000, 102_149, 0, 0, 0.0, None, 0, 0))
+        await self.gate.wait()
+        for phase in ("inventory.destination", "users", "checks", "report"):
+            self.sink(PhaseChanged(phase))
+        now = datetime.now()
+        return RunSummary("audit", now, now, Path("/tmp/fake-audit"), findings=[])
+
+    async def aclose(self) -> None:
+        pass
+
+
+async def test_checks_step_list_shows_running_step_then_collapses():
+    from m365tools.tui.widgets import StepList
+
+    app = make_app(job_cls=GatedAuditJob)
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.load_profile("svc")
+        await pilot.press("a")
+        await pilot.pause(0.1)
+        steps = app.screen.query_one("#checks").query_one(StepList)
+        assert steps.display and steps.running
+        lines = rendered(steps.render()).splitlines()
+        assert lines[0].startswith("●") and "inventory source" in lines[0] and "102,149 items" in lines[0]
+        assert "· 2.34 GB" in lines[0]
+        assert lines[1][0] in "◐◓◑◒" and "permissions scan" in lines[1] and "45,000/102,149" in lines[1]
+        assert "━" in lines[1]  # progress bar on the running step
+        assert lines[2].startswith("○") and "inventory destination" in lines[2]
+        assert [ln.split()[1] for ln in lines[:6]] == ["inventory", "permissions", "inventory", "users", "checks",
+                                                      "report"]
+        GatedAuditJob.instances[-1].gate.set()
+        await settle(app, pilot)
+        assert steps.display and not steps.running and steps.collapsed
+        summary = rendered(steps.render()).strip()
+        assert summary.startswith("● audit took ") and "slowest" in summary
+        assert all(st.state == "done" for st in steps.steps)

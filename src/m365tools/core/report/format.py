@@ -22,3 +22,13 @@ def fmt_duration(seconds: float) -> str:
     m, s = divmod(s, 60)
     base = f"{h:02d}:{m:02d}:{s:02d}"
     return f"{d}d {base}" if d else base
+
+
+def fmt_elapsed(seconds: float) -> str:
+    """Short elapsed time for step lists: ``8.1s``, ``1m 42s``, ``2h 05m``."""
+    if seconds < 60:
+        return f"{max(seconds, 0):.1f}s"
+    s = round(seconds)
+    h, s = divmod(s, 3600)
+    m, s = divmod(s, 60)
+    return f"{h}h {m:02d}m" if h else f"{m}m {s:02d}s"

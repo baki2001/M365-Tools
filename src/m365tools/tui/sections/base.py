@@ -29,7 +29,7 @@ from textual.widgets import Static
 from m365tools.core.events import ProgressEvent
 
 from .. import theme
-from ..widgets import Activity
+from ..widgets import Activity, StepList
 
 if TYPE_CHECKING:
     from ..app import M365App
@@ -97,8 +97,18 @@ class Section(Vertical):
         except NoMatches:
             return None
 
+    @property
+    def steps(self) -> StepList | None:
+        """Sections with a :class:`StepList` show it instead of the one-line activity while running."""
+        try:
+            return self.query_one(StepList)
+        except NoMatches:
+            return None
+
     def on_job_event(self, ev: ProgressEvent) -> None:
-        if self.activity is not None:
+        if self.steps is not None:
+            self.steps.feed(ev)
+        elif self.activity is not None:
             self.activity.feed(ev)
 
     async def run_job(self, name: str, op: Callable[[Any], Awaitable[T]]) -> tuple[bool, T | None]:
@@ -109,8 +119,13 @@ class Section(Vertical):
             return False, None
         previous = self.status
         self.status = theme.RUNNING
-        if self.activity is not None:
+        steps = self.steps
+        if steps is not None:
+            steps.start(name)
+            self.run_state_changed()
+        elif self.activity is not None:
             self.activity.start(name)
+        ok = False
         try:
             result = await op(job)
         except asyncio.CancelledError:
@@ -121,11 +136,24 @@ class Section(Vertical):
             self.summary = f"{name} failed"
             app.report_error(exc, name)
             return False, None
+        else:
+            ok = True
         finally:
-            if self.activity is not None:
+            if steps is not None:
+                # Progress events reach us as messages on the app queue: finish after the ones still queued.
+                app.call_later(self._finish_steps, steps, ok)
+            elif self.activity is not None:
                 self.activity.stop()
             app.end()
         return True, result
+
+
+    def _finish_steps(self, steps: StepList, ok: bool) -> None:
+        steps.finish(ok)
+        self.run_state_changed()
+
+    def run_state_changed(self) -> None:
+        """The step list started or finished (override to hide the empty hint while running)."""
 
 
 def set_text(widget: Static, text: str | Text, style: str = "") -> None:

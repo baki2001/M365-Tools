@@ -19,7 +19,16 @@ from textual.widget import Widget
 from textual.widgets import DataTable, OptionList, RichLog
 from textual.widgets.option_list import Option
 
-from m365tools.core.events import ItemStarted, LogLine, PhaseChanged, ProgressEvent, Stats, Throttled
+from m365tools.core.events import (
+    ItemStarted,
+    LogLine,
+    PhaseChanged,
+    ProgressEvent,
+    Stats,
+    Throttled,
+    phase_label,
+)
+from m365tools.core.report.format import fmt_elapsed
 
 from . import theme
 from .theme import CRUST, DIM, FG, GLYPH, GLYPH_STYLE, KEY, MAUVE, SPINNER, SUB, YELLOW
@@ -332,6 +341,7 @@ class Activity(Widget):
         super().__init__(id=id)
         self.label = ""
         self.phase = ""
+        self.phase_id = ""
         self.progress = ""
         self.throttle_until = 0.0
         self.throttle_text = ""
@@ -361,10 +371,12 @@ class Activity(Widget):
 
     def feed(self, ev: ProgressEvent) -> None:
         if isinstance(ev, PhaseChanged):
-            self.phase = ev.phase + (f": {ev.detail}" if ev.detail else "")
+            self.phase_id = ev.phase
+            self.phase = phase_label(ev.phase) + (f": {ev.detail}" if ev.detail else "")
             self.progress = ""
         elif isinstance(ev, Stats):
-            unit = "items" if self.phase.startswith("inventory") else "files"
+            unit = STEP_UNITS.get(self.phase_id, "items" if self.phase_id.split(".")[0] in (
+                "inventory", "permissions") else "files")
             self.progress = f"{ev.done:,}/{ev.total:,} {unit}"
         elif isinstance(ev, ItemStarted):
             self.progress = f"{ev.index:,}/{ev.total:,} {ev.rel_path}"
@@ -384,4 +396,196 @@ class Activity(Widget):
             t.append(" · ", style=DIM).append(self.throttle_text, style=YELLOW)
         t.no_wrap = True
         t.overflow = "ellipsis"
+        return t
+
+
+# ------------------------------------------------------------------------------------------------ step list
+
+STEP_SPINNER = "◐◓◑◒"
+STEP_UNITS = {"users": "users", "checks": "checks", "plan": "files"}
+LEGACY_PHASES = {"inventory": "inventory.source", "permissions": "permissions.source"}
+
+
+class _Step:
+    __slots__ = ("bytes", "detail", "done", "ended", "phase", "started", "state", "total")
+
+    def __init__(self, phase: str) -> None:
+        self.phase = phase
+        self.state = "todo"  # todo | running | done | failed
+        self.detail = ""
+        self.done = self.total = self.bytes = 0
+        self.started: float | None = None
+        self.ended: float | None = None
+
+    def elapsed(self, now: float) -> float | None:
+        if self.started is None:
+            return None
+        return (self.ended or now) - self.started
+
+
+class StepList(Widget):
+    """The steps of an operation's pre-phase (audit, dry run), one line each::
+
+        ● inventory source      102,149 items · 2.4 GB      12.4s
+        ◐ permissions scan      45,000/102,149  ━━━━━──     8.1s
+        ○ inventory destination
+
+    Fed with the core progress events (``PhaseChanged`` moves to a step, ``Stats`` is that step's progress);
+    phases in ``aliases`` count towards another step, unknown phases are ignored. After :meth:`finish` it
+    collapses to one line ("audit took 1m 42s") that stays above the results."""
+
+    DEFAULT_CSS = "StepList { height: auto; display: none; margin: 0 0 1 0; }"
+    LABEL_W, INFO_W, BAR_W = 22, 26, 16
+
+    def __init__(self, phases: Iterable[str], *, aliases: dict[str, str] | None = None, id: str | None = None
+                 ) -> None:
+        super().__init__(id=id)
+        self.phases = tuple(phases)
+        self.aliases = {**LEGACY_PHASES, **(aliases or {})}
+        self.label = ""
+        self.steps: list[_Step] = [_Step(p) for p in self.phases]
+        self.collapsed = False
+        self.ok = True
+        self.started = 0.0
+        self.ended: float | None = None
+        self.throttle_until = 0.0
+        self.throttle_text = ""
+        self._frame = 0
+        self._timer: Timer | None = None
+
+    # -- state ----------------------------------------------------------------------------------------
+
+    @property
+    def running(self) -> bool:
+        return self._timer is not None
+
+    @property
+    def current(self) -> _Step | None:
+        return next((st for st in self.steps if st.state == "running"), None)
+
+    def start(self, label: str) -> None:
+        self.label = label
+        self.steps = [_Step(p) for p in self.phases]
+        self.collapsed, self.ok, self.ended = False, True, None
+        self.started = time.monotonic()
+        self.display = True
+        if self._timer is None:
+            self._timer = self.set_interval(0.15, self._tick)
+        self.refresh(layout=True)
+
+    def finish(self, ok: bool = True) -> None:
+        now = time.monotonic()
+        cur = self.current
+        if cur is not None:
+            cur.state, cur.ended = ("done" if ok else "failed"), now
+        self.ok, self.ended, self.collapsed = ok, now, True
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+        self.refresh(layout=True)
+
+    def clear(self) -> None:
+        self.finish()
+        self.display = False
+
+    def _tick(self) -> None:
+        self._frame += 1
+        self.refresh()
+
+    def feed(self, ev: ProgressEvent) -> None:
+        if isinstance(ev, PhaseChanged):
+            self._enter(self.aliases.get(ev.phase, ev.phase), ev.detail)
+        elif isinstance(ev, Stats):
+            cur = self.current
+            if cur is not None:
+                cur.done, cur.total, cur.bytes = ev.done, ev.total, ev.bytes_done
+        elif isinstance(ev, Throttled):
+            self.throttle_until = time.monotonic() + ev.seconds
+            self.throttle_text = f"throttled, waiting {ev.seconds:.0f}s ({ev.what})"
+        else:
+            return
+        self.refresh(layout=isinstance(ev, PhaseChanged))
+
+    def _enter(self, phase: str, detail: str) -> None:
+        if phase not in self.phases:
+            return
+        idx = self.phases.index(phase)
+        step = self.steps[idx]
+        if step.state == "running":  # a sub-step (the next check, the next route ...)
+            step.detail = detail
+            return
+        now = time.monotonic()
+        for st in self.steps[:idx]:
+            if st.state == "running":
+                st.state, st.ended = "done", now
+        step.state, step.started, step.ended, step.detail = "running", now, None, detail
+        step.done = step.total = step.bytes = 0
+
+    # -- rendering ------------------------------------------------------------------------------------
+
+    def _info(self, st: _Step) -> Text:
+        unit = STEP_UNITS.get(st.phase, "items")
+        t = Text(no_wrap=True, overflow="ellipsis")
+        if st.state == "running":
+            if st.total:
+                t.append(f"{st.done:,}/{st.total:,}", style=FG)
+                if st.phase == "checks" and st.detail:
+                    t.append(f" {st.detail}", style=SUB)
+            elif st.detail:
+                t.append(st.detail, style=SUB)
+        elif st.state in ("done", "failed"):
+            if st.phase.startswith("inventory") and (st.total or st.done):
+                t.append(f"{st.done:,} items", style=SUB)
+                if st.bytes:
+                    t.append(f" · {theme.size(st.bytes)}", style=SUB)
+            elif st.total:
+                t.append(f"{st.total:,} {unit}", style=SUB)
+            elif st.detail:
+                t.append(st.detail, style=SUB)
+        return t
+
+    def _bar(self, st: _Step) -> Text:
+        if st.state != "running" or not st.total:
+            return Text(" " * self.BAR_W)
+        filled = round(self.BAR_W * min(st.done / st.total, 1.0))
+        return Text.assemble(("━" * filled, YELLOW), ("─" * (self.BAR_W - filled), theme.SURFACE1))
+
+    def render(self) -> Table | Text:
+        now = time.monotonic()
+        if self.collapsed:
+            return self._summary_line(now)
+        grid = Table.grid(padding=(0, 1))
+        grid.add_column(width=1, no_wrap=True)
+        grid.add_column(width=self.LABEL_W, no_wrap=True)
+        grid.add_column(width=self.INFO_W, no_wrap=True)
+        grid.add_column(width=self.BAR_W, no_wrap=True)
+        grid.add_column(justify="right", no_wrap=True, min_width=7)
+        for st in self.steps:
+            if st.state == "done":
+                glyph, gstyle, lstyle = "●", theme.GREEN, FG
+            elif st.state == "failed":
+                glyph, gstyle, lstyle = "✗", theme.RED, FG
+            elif st.state == "running":
+                glyph, gstyle, lstyle = STEP_SPINNER[self._frame % len(STEP_SPINNER)], YELLOW, f"bold {FG}"
+            else:
+                glyph, gstyle, lstyle = "○", DIM, DIM
+            el = st.elapsed(now)
+            grid.add_row(Text(glyph, style=gstyle), Text(phase_label(st.phase), style=lstyle), self._info(st),
+                         self._bar(st), Text(fmt_elapsed(el) if el is not None else "", style=SUB))
+        if now < self.throttle_until:
+            grid.add_row("", Text(self.throttle_text, style=YELLOW), "", "", "")
+        return grid
+
+    def _summary_line(self, now: float) -> Text:
+        total = (self.ended or now) - self.started
+        t = Text(no_wrap=True, overflow="ellipsis")
+        if self.ok:
+            t.append("● ", style=theme.GREEN)
+        else:
+            t.append("✗ ", style=theme.RED)
+        t.append(f"{self.label} {'took' if self.ok else 'failed after'} {fmt_elapsed(total)}", style=FG)
+        timed = [(st.elapsed(now) or 0.0, st) for st in self.steps if st.started is not None]
+        if timed:
+            secs, slow = max(timed, key=lambda x: x[0])
+            t.append(" · slowest ", style=DIM).append(f"{phase_label(slow.phase)} {fmt_elapsed(secs)}", style=SUB)
         return t

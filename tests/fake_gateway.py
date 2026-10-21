@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -155,8 +155,12 @@ class FakeGateway:
                     editor_name=e.editor_name, version=e.version, checked_out_to=e.checked_out_to,
                     prog_id=e.prog_id, server_relative_url=e.url)
 
-    async def iter_unique_permission_ids(self, lib: LibraryRef) -> AsyncIterator[int]:
+    async def iter_unique_permission_ids(
+        self, lib: LibraryRef, on_page: Callable[[int], None] | None = None
+    ) -> AsyncIterator[int]:
         self.calls.append(("iter_unique_permission_ids", lib.title))
+        if on_page is not None:
+            on_page(len(self.libraries[lib.title].entries))
         for i in sorted(self.libraries[lib.title].unique_ids):
             yield i
 

@@ -501,6 +501,7 @@ async def _iter_keyset(
     select: Iterable[str],
     expand: Iterable[str] = (),
     page_size: int = 2000,
+    on_page: Callable[[int], None] | None = None,
 ) -> AsyncIterator[dict]:
     """Page a list's /items with ``$orderby=ID&$filter=ID gt <last>&$top=N`` (keyset paging).
 
@@ -527,6 +528,8 @@ async def _iter_keyset(
             expand = sorted({f.split("/", 1)[0] for f in select if "/" in f})
             continue
         rows = _values(data)
+        if on_page is not None:
+            on_page(len(rows))
         if not rows:
             return
         for row in rows:
@@ -562,11 +565,13 @@ async def iter_items(
 
 
 async def iter_unique_permission_ids(
-    client: _SpClientLike, lib: LibraryRef, *, page_size: int = 5000
+    client: _SpClientLike, lib: LibraryRef, *, page_size: int = 5000,
+    on_page: Callable[[int], None] | None = None,
 ) -> AsyncIterator[int]:
-    """Yield item ids that have unique (broken) role assignments."""
+    """Yield item ids that have unique (broken) role assignments. ``on_page(n)`` is called after each page of
+    ``n`` scanned rows (progress; the iterator itself only yields the matching ids)."""
     base = _api(lib.site_url, _list_path(lib, "items"))
-    async for row in _iter_keyset(client, base, ["Id", "HasUniqueRoleAssignments"], (), page_size):
+    async for row in _iter_keyset(client, base, ["Id", "HasUniqueRoleAssignments"], (), page_size, on_page):
         if _bool(row.get("HasUniqueRoleAssignments")):
             yield _int(row.get("Id", row.get("ID")))
 

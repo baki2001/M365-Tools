@@ -17,6 +17,11 @@ def inventory_base(lib: LibraryRef, folder: str) -> str:
     return f"{root}/{folder}" if folder else root
 
 
+def _stats(done: int, total: int, bytes_done: int = 0) -> Stats:
+    return Stats(done=done, total=total, bytes_done=bytes_done, bytes_total=0, mbps=0.0, eta_s=None, failed=0,
+                 warnings=0)
+
+
 async def build_inventory(
     gw: SpGateway,
     library: LibraryRef,
@@ -25,12 +30,18 @@ async def build_inventory(
     *,
     page_size: int = PAGE_SIZE,
     label: str = "",
+    phase: str = "inventory.source",
+    permissions_phase: str | None = "permissions.source",
 ) -> Inventory:
-    """Enumerate every item below ``folder`` (recursive). Progress is emitted once per page of ``page_size``."""
+    """Enumerate every item below ``folder`` (recursive). Progress is emitted once per page of ``page_size``.
+
+    Emits ``PhaseChanged(phase)`` for the listing and, unless ``permissions_phase`` is None (then the scan is
+    skipped), ``PhaseChanged(permissions_phase)`` plus page-wise :class:`Stats` for the unique-permission scan.
+    """
     base = inventory_base(library, folder)
     prefix = base.lower() + "/"
     what = label or library.title
-    sink(PhaseChanged("inventory", f"{what}: {base}"))
+    sink(PhaseChanged(phase, f"{what}: {base}"))
 
     items: list[Item] = []
     seen = 0
@@ -38,8 +49,7 @@ async def build_inventory(
     total = max(library.item_count, 0)
 
     def progress() -> None:
-        sink(Stats(done=seen, total=max(total, seen), bytes_done=bytes_seen, bytes_total=0, mbps=0.0,
-                   eta_s=None, failed=0, warnings=0))
+        sink(_stats(seen, max(total, seen), bytes_seen))
 
     async for raw in gw.iter_items(library):
         seen += 1
@@ -52,14 +62,25 @@ async def build_inventory(
             progress()
     progress()
 
-    if items:
+    if items and permissions_phase is not None:
+        scan_total = max(total, seen)
+        sink(PhaseChanged(permissions_phase, f"{scan_total:,} items"))
+        scanned = 0
+
+        def on_page(n: int) -> None:
+            nonlocal scanned
+            scanned += n
+            sink(_stats(min(scanned, scan_total), scan_total))
+
+        sink(_stats(0, scan_total))
         by_id = {i.id: i for i in items}
         unique = 0
-        async for item_id in gw.iter_unique_permission_ids(library):
+        async for item_id in gw.iter_unique_permission_ids(library, on_page=on_page):
             it = by_id.get(item_id)
             if it is not None:
                 it.unique_permissions = True
                 unique += 1
+        sink(_stats(scan_total, scan_total))
         if unique:
             sink(LogLine("info", f"{what}: {unique} item(s) with unique permissions"))
 

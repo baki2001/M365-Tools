@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from m365tools.core.errors import ConfigError, NotFoundError, ValidationError
-from m365tools.core.events import EventSink, LogLine, PhaseChanged, null_sink
+from m365tools.core.events import EventSink, LogLine, PhaseChanged, PhaseClock, null_sink
 
 from .checks import CheckContext, run_checks
 from .engine import JournalLike, Migrator, StatusLike
@@ -38,7 +38,7 @@ from .models import (
     RunSummary,
 )
 from .plan import build_plan, plan_to_json
-from .usermap import UserMap, build_usermap, save_usermap
+from .usermap import ResolvedUsers, UserMap, build_usermap, collect_users, resolve_users, save_usermap
 from .verify import compare
 
 RunDirFactory = Callable[[str], Path]  # mode ("audit", "dryrun", "migrate", "verify", "lock") -> new run dir
@@ -168,7 +168,8 @@ class Job:
         else:
             self._factory = gateways
         self.opts = opts
-        self.sink = sink
+        self._clock = PhaseClock(sink)
+        self.sink: EventSink = self._clock  # adds "<phase>: ... (+12.4s)" log lines at every phase start
         self.run_dir_factory = run_dir_factory or _default_run_dir_factory(opts)
         self.journal_factory = journal_factory
         self.status_factory = status_factory
@@ -195,6 +196,7 @@ class Job:
 
     async def audit(self) -> RunSummary:
         started = datetime.now()
+        self._clock.reset()
         run_dir = self._new_run_dir("audit")
         st = await self._load(run_dir)
         findings = await self._audit(st, run_dir)
@@ -204,9 +206,10 @@ class Job:
 
     async def dryrun(self) -> tuple[Plan, RunSummary]:
         started = datetime.now()
+        self._clock.reset()
         run_dir = self._new_run_dir("dryrun")
         st = await self._load(run_dir)
-        plan = self._plan(st, run_dir)
+        plan = self._plan(st, run_dir, phase=True)
         assert st.dst.gw is not None
         self._migrator = Migrator(st.src.gw, st.dst.gw, plan, self.opts, run_dir, self.sink, None, None,
                                   self._load_usermap(), dry_run=True, route_targets=st.route_targets(),
@@ -221,6 +224,7 @@ class Job:
 
     async def migrate(self, resume_run_dir: Path | None = None, force: bool = False) -> RunSummary:
         started = datetime.now()
+        self._clock.reset()
         if resume_run_dir is not None:
             run_dir = Path(resume_run_dir)
             run_dir.mkdir(parents=True, exist_ok=True)
@@ -265,6 +269,7 @@ class Job:
 
     async def verify(self) -> tuple[CompareResult, RunSummary]:
         started = datetime.now()
+        self._clock.reset()
         run_dir = self._new_run_dir("verify")
         st = await self._load(run_dir)
         if st.dst.inv is None:
@@ -302,6 +307,7 @@ class Job:
         return result, summary
 
     async def lock(self, apply: bool = False, include_owners: bool = False) -> list[LockChange]:
+        self._clock.reset()
         run_dir = self._new_run_dir("lock")
         self.sink(PhaseChanged("lock", "preview" if not apply else "apply"))
         gw = await self._gateway(self.opts.source)
@@ -341,8 +347,13 @@ class Job:
             return await gw.get_library(ep.library)
         return await gw.get_default_library()
 
-    async def _side(self, ep: Endpoint, label: str, required: bool) -> _Side:
+    async def _side(self, ep: Endpoint, label: str, required: bool, *, phase: str = "inventory.destination",
+                    permissions_phase: str | None = None) -> _Side:
+        """Resolve + inventory one endpoint. Only the source gets the unique-permission scan (the checks and
+        reports never look at destination permissions, and it costs one request per 5000 items)."""
         side = _Side(ep)
+        if phase != "inventory.source":
+            self.sink(PhaseChanged(phase, f"{label}: {ep.describe()}"))
         try:
             side.gw = await self._gateway(ep)
             side.lib = await self._resolve_library(side.gw, ep)
@@ -353,11 +364,13 @@ class Job:
             self.sink(LogLine("error", f"{label}: {side.error}"))
             return side
         side.base = inventory_base(side.lib, ep.folder)
-        side.inv = await build_inventory(side.gw, side.lib, ep.folder, self.sink, label=label)
+        side.inv = await build_inventory(side.gw, side.lib, ep.folder, self.sink, label=label, phase=phase,
+                                         permissions_phase=permissions_phase)
         return side
 
     async def _load(self, run_dir: Path) -> _State:
-        src = await self._side(self.opts.source, "source", required=True)
+        src = await self._side(self.opts.source, "source", required=True, phase="inventory.source",
+                               permissions_phase="permissions.source")
         dst = await self._side(self.opts.destination, "destination", required=False)
         st = _State(src, dst)
         for r in self.opts.routes:
@@ -373,10 +386,12 @@ class Job:
             return UserMap.load(Path(p))
         return None
 
-    def _plan(self, st: _State, run_dir: Path, write: bool = True) -> Plan:
+    def _plan(self, st: _State, run_dir: Path, write: bool = True, phase: bool = False) -> Plan:
         if st.dst.inv is None or st.dst.base is None:
             raise NotFoundError(st.dst.error or "destination library not found")
         assert st.src.inv is not None
+        if phase:
+            self.sink(PhaseChanged("plan", f"{len(st.src.inv.items):,} source item(s)"))
         plan = build_plan(st.src.inv, st.dst.inv, self.opts, st.dst.base, st.route_bases(), st.route_invs())
         self.plan = plan
         if write:
@@ -389,22 +404,41 @@ class Job:
     async def _audit(self, st: _State, run_dir: Path) -> list[Finding]:
         assert st.src.inv is not None and st.src.lib is not None and st.src.gw is not None
         plan = self._plan(st, run_dir) if st.dst.inv is not None else None
+        resolved = await self._users(st, run_dir)
         ctx = CheckContext(
             src_inv=st.src.inv, dst_inv=st.dst.inv, src_lib=st.src.lib, dst_lib=st.dst.lib, opts=self.opts,
             plan=plan, src_gw=st.src.gw, dst_gw=st.dst.gw, usermap=self.usermap, dst_error=st.dst.error,
+            resolved_users=resolved,
         )
         findings = await run_checks(ctx, self.sink)
         self.findings = findings
         _csv(run_dir / "findings.csv", ["severity", "category", "path", "detail", "fix"],
              [[f.severity.value, f.category, f.path, f.detail, f.fix] for f in findings])
-        if st.dst.gw is not None and self.opts.restore_metadata and self.usermap is None:
+        return findings
+
+    async def _users(self, st: _State, run_dir: Path) -> ResolvedUsers | None:
+        """The "users" phase: look every distinct source author/editor up at the destination once (shared by
+        the users check and the user-map proposal, which is written here)."""
+        assert st.src.inv is not None
+        if st.dst.gw is None or not self.opts.restore_metadata:
+            why = "destination not available" if st.dst.gw is None else "metadata restore is off"
+            self.sink(PhaseChanged("users", f"skipped ({why})"))
+            return None
+        um = self.usermap
+        emails = [e for e in collect_users(st.src.inv) if um is None or not um.resolve(e)]
+        try:
+            resolved = await resolve_users(emails, st.dst.gw, self.sink)
+        except Exception as exc:  # noqa: BLE001 - the users check falls back to its own lookups
+            self.sink(LogLine("warn", f"user lookup failed: {exc}"))
+            return None
+        if um is None:
             try:
-                entries = await build_usermap(st.src.inv, st.dst.gw)
+                entries = await build_usermap(st.src.inv, st.dst.gw, resolved)
                 save_usermap(run_dir / "usermap.csv", entries)
                 self.sink(LogLine("info", f"user map proposal written: {run_dir / 'usermap.csv'}"))
             except Exception as exc:  # noqa: BLE001 - proposal only
                 self.sink(LogLine("warn", f"user map proposal failed: {exc}"))
-        return findings
+        return resolved
 
     @staticmethod
     def _lock_rows(changes: list[LockChange]) -> list[dict[str, str]]:
@@ -425,6 +459,7 @@ class Job:
             from m365tools.core import report as rep
         except ImportError:
             return
+        self.sink(PhaseChanged("report", f"{run_dir / 'report.html'}"))
         try:
             if mode == "audit" and st is not None and st.src.inv is not None and st.src.lib is not None:
                 opts_desc = {"Source": self.opts.source.describe(), "Destination": self.opts.destination.describe(),
