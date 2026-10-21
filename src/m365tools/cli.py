@@ -80,6 +80,7 @@ app.add_typer(spmig_app, name="spmig")
 
 LEVEL_STYLE = {"debug": "dim", "info": "", "ok": "green", "warn": "yellow", "error": "bold red"}
 SEVERITY_STYLE = {Severity.BLOCKING: "bold red", Severity.WARN: "yellow", Severity.INFO: "cyan"}
+ACCENT = "bold cyan"
 
 
 def _console(stderr: bool = False) -> Console:
@@ -87,7 +88,7 @@ def _console(stderr: bool = False) -> Console:
 
 
 def _fail(console: Console, message: str, code: int = EXIT_FAIL) -> typer.Exit:
-    console.print(f"[bold red]error:[/] {escape(message)}")
+    console.print(f"[bold red]✗ error:[/] {escape(message)}")
     return typer.Exit(code)
 
 
@@ -188,7 +189,8 @@ class ConsoleRenderer:
                 body.append("\n\nURL:  ", style="bold").append(ev.url, style="bold underline cyan")
             if ev.code:
                 body.append("\nCode: ", style="bold").append(ev.code, style="bold reverse green")
-            self.console.print(Panel(body, title=f"Sign in to tenant '{ev.tenant}'", border_style="magenta"))
+            self.console.print(Panel(body, title=f"[{ACCENT}]Sign in to {escape(ev.tenant)}[/]",
+                                       border_style="cyan", expand=False))
         elif isinstance(ev, LogLine):
             if self.quiet and ev.level not in ("warn", "error"):
                 return
@@ -199,7 +201,7 @@ class ConsoleRenderer:
         elif isinstance(ev, PhaseChanged):
             self.status.phase, self.status.current = ev.phase, ""
             if not self.quiet:
-                self.console.print(Text(f"== {ev.phase}" + (f": {ev.detail}" if ev.detail else ""), style="bold"))
+                self.console.print(Text(f"▸ {ev.phase}" + (f"  {ev.detail}" if ev.detail else ""), style=ACCENT))
         elif isinstance(ev, Throttled):
             self.status.throttle = f"throttled, waiting {ev.seconds:.0f}s (attempt {ev.attempt}) - {ev.what}"
             self.status.throttle_until = time.monotonic() + ev.seconds
@@ -244,7 +246,7 @@ class ConsoleRenderer:
 
 
 def findings_table(findings: list[Finding], limit: int | None = FINDINGS_PER_SEVERITY) -> Table:
-    t = Table(title="Findings", show_lines=False, expand=True)
+    t = Table(title="Findings", show_lines=False, expand=True, border_style="dim")
     t.add_column("Severity", no_wrap=True)
     t.add_column("Category", no_wrap=True)
     t.add_column("Path", overflow="fold", ratio=3)
@@ -267,15 +269,18 @@ def findings_table(findings: list[Finding], limit: int | None = FINDINGS_PER_SEV
 
 
 def _counts_line(findings: list[Finding]) -> Text:
+    """``N blocking · N warn · N info`` with each count coloured by severity (dim when zero)."""
     t = Text()
-    for sev in SEVERITY_ORDER:
+    for i, sev in enumerate(SEVERITY_ORDER):
         n = sum(1 for f in findings if f.severity == sev)
-        t.append(f"{sev}: {n}   ", style=SEVERITY_STYLE[sev] if n else "dim")
+        if i:
+            t.append(" · ", style="dim")
+        t.append(f"{n} {sev}", style=SEVERITY_STYLE[sev] if n else "dim")
     return t
 
 
 def summary_table(s: RunSummary, extra: list[tuple[str, str]] | None = None) -> Table:
-    t = Table(title=f"{s.mode} summary", show_header=False, box=None, padding=(0, 2))
+    t = Table(title=f"{s.mode} summary", show_header=False, border_style="dim")
     t.add_column(style="bold")
     t.add_column()
     rows: list[tuple[str, str]] = [("Duration", fmt_duration(s.duration_s))]
@@ -290,17 +295,17 @@ def summary_table(s: RunSummary, extra: list[tuple[str, str]] | None = None) -> 
     elif s.mode == "verify":
         rows += [("OK", f"{s.copied:,}"), ("Problems", f"{s.failed:,}")]
     if s.findings:
-        rows.append(("Findings", _counts_line(s.findings).plain))
+        rows.append(("Findings", ""))
     for k, v in rows + (extra or []):
-        t.add_row(k, v)
+        t.add_row(k, _counts_line(s.findings) if k == "Findings" else v)
     return t
 
 
 def _print_paths(console: Console, run_dir: Path | None) -> None:
     if run_dir is None:
         return
-    console.print(f"run folder: [bold]{escape(str(run_dir))}[/]", soft_wrap=True)
-    console.print(f"report: {escape(str(Path(run_dir) / 'report.html'))}", soft_wrap=True)
+    console.print(f"[dim]Run folder: {escape(str(run_dir))}[/]", soft_wrap=True)
+    console.print(f"[bold]Report: {escape(str(Path(run_dir) / 'report.html'))}[/]", soft_wrap=True)
 
 
 # ================================================================================================ options
@@ -537,15 +542,18 @@ def _execute(mode: str, c: CommonArgs, op: Callable[[Any], Awaitable[Any]], *, n
         raise _fail(console, str(exc)) from None
     renderer = ConsoleRenderer(console, quiet=c.quiet, progress=mode if mode in ("migrate", "dryrun") else None)
     if not c.quiet:
-        console.print(f"[bold]{mode}[/]  {escape(opts.source.describe())}"
-                      + (f"  ->  {escape(opts.destination.describe())}" if need_dst else ""))
+        route = escape(opts.source.describe()) + (f" → {escape(opts.destination.describe())}" if need_dst else "")
+        if resume_dir is not None:
+            route += f"\n[dim]run folder: {escape(str(resume_dir))}[/]"
+        console.print(Panel(route, title=f"[{ACCENT}]m365 spmig {mode}[/]", border_style="cyan", expand=False))
     job = Job(make_gateway_factory(cfg, renderer), opts, renderer, make_run_dir_factory(opts))
     try:
         result, interrupted = _run_interruptible(job, op, renderer)
     except BlockingFindingsError as exc:
         console.print(findings_table(exc.blocking, limit=None))
-        console.print(f"[bold red]{escape(str(exc))}[/]")
-        console.print("Fix the blocking findings, or re-run with --force to migrate anyway.")
+        console.print(Text("audit: ") + _counts_line(exc.findings))
+        console.print(f"[bold red]✗ {escape(str(exc))}[/]")
+        console.print("[yellow]![/] Fix the blocking findings, or re-run with --force to migrate anyway.")
         _print_paths(console, exc.run_dir)
         if c.json_out:
             _emit_json({"mode": mode, "error": "blocking_findings", "run_dir": str(exc.run_dir),
@@ -554,7 +562,7 @@ def _execute(mode: str, c: CommonArgs, op: Callable[[Any], Awaitable[Any]], *, n
     except M365Error as exc:
         raise _fail(console, f"{type(exc).__name__}: {exc}") from None
     if interrupted and result is None:
-        console.print("[yellow]interrupted[/]")
+        console.print("[yellow]! interrupted[/]")
         _print_paths(console, getattr(job, "run_dir", None))
         raise typer.Exit(EXIT_INTERRUPTED)
     return result, job, renderer
@@ -578,8 +586,9 @@ def audit(common: CommonArgs) -> None:
     summary, _job, r = _execute("audit", common, lambda job: job.audit())
     if summary.findings:
         r.console.print(findings_table(summary.findings))
+        r.console.print(Text("Findings: ") + _counts_line(summary.findings))
     else:
-        r.console.print("[green]No findings.[/]")
+        r.console.print("[green]✓ No findings.[/]")
     _finish(r.console, summary, common, EXIT_FAIL if summary.blocking else EXIT_OK)
 
 
@@ -589,7 +598,7 @@ def dryrun(common: CommonArgs) -> None:
     res, _job, r = _execute("dryrun", common, lambda job: job.dryrun())
     plan, summary = res
     counts = plan.counts()
-    t = Table(title="Plan", show_header=True)
+    t = Table(title="Plan", show_header=True, border_style="dim")
     t.add_column("Action")
     t.add_column("Count", justify="right")
     for a in Action:
@@ -616,7 +625,7 @@ def migrate(
     if summary.failed:
         code = EXIT_FAIL
     if summary.stopped_early:
-        r.console.print(f"[yellow]stopped early.[/] resume with: m365 spmig migrate --resume "
+        r.console.print(f"[yellow]! stopped early.[/] resume with: m365 spmig migrate --resume "
                         f"{escape(str(summary.run_dir))}", soft_wrap=True)
         code = EXIT_INTERRUPTED
     _finish(r.console, summary, common, code)
@@ -669,9 +678,10 @@ def lock(
     r.console.print(t)
     n = sum(1 for ch in changes if ch.will_change)
     if apply:
-        r.console.print(f"[green]{n} principal(s) set to Read.[/]")
+        r.console.print(f"[green]✓ {n} principal(s) set to Read.[/]")
     else:
-        r.console.print(f"Preview only: {n} principal(s) would be set to Read. Re-run with --apply to apply.")
+        r.console.print(f"[yellow]![/] Preview only: {n} principal(s) would be set to Read. "
+                        "Re-run with --apply to apply.")
     run_dir = getattr(job, "run_dir", None)
     _print_paths(r.console, run_dir)
     if common.json_out:
@@ -740,9 +750,10 @@ def tenant_add(
         path = save_config(cfg)
     except (M365Error, OSError) as exc:
         raise _fail(console, str(exc)) from None
-    console.print(f"[green]{'Updated' if existed else 'Added'} tenant '{escape(t.name)}'[/] "
-                  f"({escape(t.sharepoint_host)}) in {escape(str(path))}")
-    console.print(f"Next: m365 tenant login {escape(t.name)}")
+    console.print(f"[green]✓[/] {'Updated' if existed else 'Added'} tenant [{ACCENT}]{escape(t.name)}[/] "
+                  f"({escape(t.sharepoint_host)})")
+    console.print(f"[dim]  saved to {escape(str(path))}[/]")
+    console.print(f"  Next: [{ACCENT}]m365 tenant login {escape(t.name)}[/]")
 
 
 @tenant_app.command("setup-help")
@@ -755,6 +766,19 @@ def tenant_setup_help(
     _console().print(tenant_setup_instructions(tenant_id), markup=False)
 
 
+def _signed_in_cell(tc: Any, cache_file_for: Callable[[Any], Path]) -> Text:
+    """Cached account name(s) for a tenant, or a dim '-' (never raises; the list is informational)."""
+    with contextlib.suppress(Exception):  # informational only
+        if cache_file_for(tc).exists():
+            from m365tools.core.auth import TokenProvider
+
+            names = [str(a.get("username") or "") for a in TokenProvider(tc).accounts()]
+            names = [n for n in names if n]
+            if names:
+                return Text(", ".join(names), style="green")
+    return Text("-", style="dim")
+
+
 @tenant_app.command("list")
 def tenant_list() -> None:
     """List configured tenants."""
@@ -763,14 +787,16 @@ def tenant_list() -> None:
     console = _console()
     cfg = _load_cfg(console)
     if not cfg.tenants:
-        console.print("No tenants configured. Add one with: m365 tenant add NAME (see m365 tenant setup-help)")
+        console.print("[yellow]![/] No tenants configured. Add one with: m365 tenant add NAME "
+                      "(see m365 tenant setup-help)")
         return
-    t = Table(title="Tenants")
-    for col in ("Name", "Tenant id", "Client id", "SharePoint host", "Signed in"):
-        t.add_column(col)
+    t = Table(title="Tenants", header_style=ACCENT, border_style="dim")
+    t.add_column("Name", style="bold", no_wrap=True)
+    t.add_column("Tenant id", overflow="fold")
+    t.add_column("Host", overflow="fold")
+    t.add_column("Signed in as", overflow="fold")
     for name, tc in sorted(cfg.tenants.items()):
-        t.add_row(Text(name), Text(tc.tenant_id), Text(tc.client_id), Text(tc.sharepoint_host),
-                  "[green]cached[/]" if cache_file_for(tc).exists() else "[dim]no[/]")
+        t.add_row(Text(name), Text(tc.tenant_id), Text(tc.sharepoint_host), _signed_in_cell(tc, cache_file_for))
     console.print(t)
 
 
@@ -792,8 +818,7 @@ def tenant_login(name: Annotated[str, typer.Argument(help="Tenant name.")]) -> N
         accounts = asyncio.run(run())
     except M365Error as exc:
         raise _fail(console, str(exc)) from None
-    console.print(f"[green]Signed in to '{escape(name)}'[/] as {escape(', '.join(accounts) or '?')}; "
-                  "token cached.")
+    console.print(f"[green]✓ Signed in as[/] [bold]{escape(', '.join(accounts) or '?')}[/]")
 
 
 # ================================================================================================ profile
