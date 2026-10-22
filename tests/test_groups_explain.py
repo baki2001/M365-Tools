@@ -32,7 +32,7 @@ async def test_explain_person() -> None:
     assert {x["group"]: x["via"] for x in g["groups"]}["SG-Doc-Sales"] == "addon"
     dana = explain_person(snap, reg, "dana@contoso.com")
     assert dana["apps"] == [{"app": "Jira Cloud", "via": "direct"}, {"app": "Payroll", "via": "direct"}]
-    assert dana["licences"] == ["ENTERPRISEPACK"]
+    assert dana["licences"] == ["Office 365 E3"]
     assert explain_person(snap, reg, "ivo@contoso.com")["roles"] == ["Global Administrator"]
     assert explain_person(snap, reg, "ivo@contoso.com")["registered"] is False
 

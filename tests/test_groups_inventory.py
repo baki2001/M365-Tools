@@ -24,7 +24,7 @@ async def test_snapshot_content() -> None:
     assert len(snap.groups) == 8 and snap.group("All Staff") is None
     assert snap.groups_of("evelien@contoso.com") == {"SG-Doc-Service", "SG-Doc-Hub", "SG-App-Jira", "SG-Lic-E3",
                                                      "SG-Doc-Finance"}
-    assert snap.person("ivo@contoso.com").licences == ["SPE_E5"]  # type: ignore[union-attr]
+    assert snap.person("ivo@contoso.com").licences == ["Microsoft 365 E5"]  # type: ignore[union-attr]
     assert [a.name for a in snap.apps] == ["Jira Cloud", "Payroll"]
     assert snap.apps_of("anna@contoso.com") == {"Jira Cloud": "SG-App-Jira"}
     assert snap.apps_of("dana@contoso.com") == {"Jira Cloud": "direct", "Payroll": "direct"}
@@ -38,7 +38,7 @@ async def test_snapshot_content() -> None:
 async def test_capabilities_and_matrix() -> None:
     snap = await fake_snapshot()
     labels = [c.label for c in snap.capabilities("ivo@contoso.com")]
-    assert labels == ["SG-App-Jira", "SG-Doc-Hub", "SG-Lic-E5", "App:Jira Cloud", "Lic:SPE_E5",
+    assert labels == ["SG-App-Jira", "SG-Doc-Hub", "SG-Lic-E5", "App:Jira Cloud", "Lic:Microsoft 365 E5",
                       "Role:Global Administrator"]
     cols, rows = matrix_rows(snap)
     assert cols[:4] == ["UPN", "Name", "Job title", "Department"]
@@ -93,7 +93,7 @@ async def test_graph_calls_through_rest_gateway() -> None:
         snap = await build_snapshot(gw, "SG-")
         assert [g.name for g in snap.groups] == ["SG-Doc-A", "SG-Doc-B"]
         assert snap.groups[0].members == ["a@contoso.com"]
-        assert snap.people[0].licences == ["ENTERPRISEPACK"]
+        assert snap.people[0].licences == ["Office 365 E3"]
         assert [a.name for a in snap.apps] == ["Jira"] and snap.apps[0].groups == ["SG-Doc-A"]
         assert snap.roles[0].members == ["a@contoso.com"]
         assert await gw.create_group("SG-Doc C/x", "purpose") == "new"
@@ -159,3 +159,14 @@ async def test_inventory_leaves_out_external_and_other_domain_accounts():
     assert any(p.upn == "zed@fabrikam.com" for p in snap.people)
     snap = await build_snapshot(gw, "SG-", domains=["contoso.com"])
     assert all(p.upn.endswith("@contoso.com") for p in snap.people)
+
+
+def test_licence_names_are_readable_without_subscribed_skus():
+    from m365tools.tools.groups.skus import licence_name
+
+    assert licence_name("cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46") == "Microsoft 365 Business Premium"
+    assert licence_name("6FD2C87F-B296-42F0-B197-1E91E994B900", {}) == "Office 365 E3"
+    assert licence_name("11111111-2222-3333-4444-555555555555", {"11111111-2222-3333-4444-555555555555": "SPE_E3"}) \
+        == "Microsoft 365 E3"
+    assert licence_name("11111111-2222-3333-4444-555555555555", {"11111111-2222-3333-4444-555555555555": "ODD"}) == "ODD"
+    assert licence_name("11111111-2222-3333-4444-555555555555") == "licence 11111111"

@@ -12,6 +12,7 @@ from m365tools.core.report.csv_ import write_csv
 
 from .gateway import GraphGateway
 from .models import AppInfo, GroupInfo, Person, RoleInfo, Snapshot, norm
+from .skus import licence_name
 
 INVENTORY_PHASES: tuple[str, ...] = ("groups", "users", "licences", "apps", "roles", "report")
 
@@ -80,7 +81,7 @@ async def build_snapshot(gw: GraphGateway, prefix: str, sink: EventSink = null_s
         snap.people.append(Person(
             id=u.id, upn=norm(u.upn), display_name=u.display_name, job_title=u.job_title,
             department=u.department, account_enabled=u.account_enabled,
-            licences=sorted(skus.get(s, s) for s in u.sku_ids),
+            licences=sorted(licence_name(s, skus) for s in u.sku_ids),
         ))
     if skus:
         sink(LogLine("info", f"{len(skus)} subscribed SKU(s)"))
