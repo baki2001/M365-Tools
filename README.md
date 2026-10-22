@@ -1,12 +1,14 @@
 # m365 toolbox
 
 Terminal tools for Microsoft 365 admins, built for Linux and WSL. One command, `m365`, opens the toolbox:
-pick a tool with `1` or `2`, and `g` brings you back.
+pick a tool with `1`, `2` or `3`; `esc` steps back and ends at home, `g` goes home at once, `ctrl+1`/`2`/`3`
+jump between tools, and `q` quits (it asks first).
 
 | Tool | What it does |
 |---|---|
 | **spmig** | Copies a SharePoint document library to another site, in your tenant or another one. Keeps folders, file dates and who created or changed each file. Checks first, shows what it would do, writes a report. |
-| **groups** | Keeps track of your `SG-*` access groups: what each is for, who is in it and why, what drifted, and what a new colleague should get. Onboards and offboards people with a preview first. |
+| **groups** | Keeps track of your `SG-*` access groups: what each is for, who is in it and why, what drifted, and which bundles (role packages) exist. |
+| **onboard** | Brings people in and out: a new colleague gets the groups of a bundle or of someone in the same role; a leaver is taken out of every registry group. Preview first, always. |
 
 Everything runs in your terminal: a guided screen (`m365`) or plain commands (`m365 spmig ...`,
 `m365 groups ...`).
@@ -134,9 +136,9 @@ An explorer: on the left a list with three tabs, **People**, **Groups** and **Bu
 `/` to filter, `j`/`k` to move. The right side shows what is highlighted: for a person their bundles,
 add-ons and every group with ● ok, ○ missing or ▲ unexplained, plus licences, apps and roles; for a group
 its purpose, owner, members and why each one is there. Actions: `i` inventory, `d` drift (`enter` on a
-finding jumps to that person or group), `s` suggest bundles (`a` accepts one), `o` onboard, `x` offboard,
-`y` sync, `m` import, `e` edit a group's purpose and owner, `r` reload the registry. Everything that writes
-shows a preview first; `A` applies it after you type `apply` (or `offboard`).
+finding jumps to that person or group), `s` suggest bundles (`a` accepts one), `y` sync, `m` import, `e` edit
+a group's purpose and owner, `r` reload the registry. Everything that writes shows a preview first; `A`
+applies it after you type `apply`.
 
 ### The scripted way: commands
 
@@ -145,9 +147,6 @@ m365 groups inventory                 # read the tenant, save a snapshot
 m365 groups suggest                   # propose bundles; --accept 1=Servicedesk --apply writes one
 m365 groups drift                     # registry vs tenant
 m365 groups explain anna@contoso.com  # why does Anna have what she has (or: a group name)
-m365 onboard new.colleague@contoso.com --like anna@contoso.com            # preview
-m365 onboard new.colleague@contoso.com --bundle Servicedesk --addon SG-Doc-Finance --apply
-m365 offboard leaver@contoso.com --apply
 ```
 
 | Step | Touches the tenant? | What you get |
@@ -156,13 +155,34 @@ m365 offboard leaver@contoso.com --apply
 | **suggest** | read only | Candidate bundles from people who share the same groups. Accepting writes only the registry. |
 | **drift** | read only | Who is missing a group they should have, who has one nobody can explain, unregistered groups. |
 | **sync** / **import** | sync creates groups; import writes the registry | Registry and tenant brought in line, preview first, `--apply` to do it. |
-| **onboard** / **offboard** | adds / removes memberships | The group changes, plus what you must do by hand (licences, apps, roles). Preview first. |
 
 **Good to know:** the tool never deletes a group, and never removes anyone except with `offboard`. Licences,
 app assignments and roles are shown but not changed. Each run leaves a folder with `report.html` and CSVs
 under `runs/groups-<tenant>/`.
 
-## 6. When something goes wrong
+## 6. Onboard and offboard (onboard)
+
+```bash
+m365            # then 3 for onboard (or: m365 onboard tui)
+```
+
+A short guided flow. `o` new person: type their sign-in name, pick "like <colleague>" or a bundle, add extra
+groups if needed, then read the preview: every group change (planned, already, not created), the manual work
+(licences, apps, roles) in its own box, and the registry entry that will be saved. `A` and typing `apply` does
+it. `x` offboards a leaver the same way (you type `offboard`); `c` checks one person against the registry.
+No snapshot yet? Press `i` right there. Recent onboard and offboard runs are listed on the left.
+
+```bash
+m365 onboard new.colleague@contoso.com --like anna@contoso.com            # preview
+m365 onboard new.colleague@contoso.com --bundle Servicedesk --addon SG-Doc-Finance --apply
+m365 onboard check anna@contoso.com
+m365 offboard leaver@contoso.com --apply
+```
+
+**Good to know:** licences, apps and roles are listed but never changed; groups outside the registry are left
+alone on offboarding.
+
+## 7. When something goes wrong
 
 | You see | What it means | What to do |
 |---|---|---|

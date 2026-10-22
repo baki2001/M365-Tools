@@ -140,3 +140,22 @@ async def test_inventory_survives_access_denied_on_optional_phases():
     assert snap.apps == [] and snap.roles == []
     warns = [e for e in sink.events if getattr(e, "level", "") == "warn"]
     assert len(warns) == 3
+
+
+async def test_inventory_leaves_out_external_and_other_domain_accounts():
+    from m365tools.tools.groups.gateway import DirUser
+    from m365tools.tools.groups.inventory import build_snapshot, is_colleague
+
+    from .fake_graph import make_fake
+
+    assert not is_colleague("x_other.nl#EXT#@contoso.onmicrosoft.com", [])
+    assert is_colleague("anna@contoso.com", []) and is_colleague("anna@contoso.com", ["contoso.com"])
+    assert not is_colleague("anna@fabrikam.com", ["contoso.com"])
+    gw = make_fake()
+    gw.users["ext1"] = DirUser("ext1", "x_other.nl#EXT#@contoso.onmicrosoft.com", "X")
+    gw.users["oth1"] = DirUser("oth1", "zed@fabrikam.com", "Zed")
+    snap = await build_snapshot(gw, "SG-")
+    assert all("#ext#" not in p.upn for p in snap.people)
+    assert any(p.upn == "zed@fabrikam.com" for p in snap.people)
+    snap = await build_snapshot(gw, "SG-", domains=["contoso.com"])
+    assert all(p.upn.endswith("@contoso.com") for p in snap.people)

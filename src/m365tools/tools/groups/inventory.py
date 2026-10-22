@@ -31,7 +31,17 @@ async def _optional[T](sink: EventSink, what: str, coro: Any, fallback: T) -> T:
         return fallback
 
 
-async def build_snapshot(gw: GraphGateway, prefix: str, sink: EventSink = null_sink) -> Snapshot:
+def is_colleague(upn: str, domains: list[str]) -> bool:
+    """Internal member account: no ``#EXT#`` (guests and cross-tenant synced users) and, when ``domains`` is set,
+    a UPN domain from that list."""
+    u = upn.lower()
+    if "#ext#" in u or "@" not in u:
+        return False
+    return not domains or u.rsplit("@", 1)[1] in domains
+
+
+async def build_snapshot(gw: GraphGateway, prefix: str, sink: EventSink = null_sink,
+                         domains: list[str] | None = None) -> Snapshot:
     """Read groups (with direct user members and owners), enabled member users, licences, enterprise apps that
     require assignment, and directory role members. Phases ``groups -> users -> licences -> apps -> roles``."""
     snap = Snapshot(prefix=prefix, taken=datetime.now())
@@ -53,9 +63,16 @@ async def build_snapshot(gw: GraphGateway, prefix: str, sink: EventSink = null_s
     sink(LogLine("info", f"{len(snap.groups)} group(s) starting with {prefix}"))
 
     sink(PhaseChanged("users"))
-    users = [u for u in await gw.list_users() if u.account_enabled and u.user_type.lower() == "member" and u.upn]
+    domains = [d.lower() for d in (domains or [])]
+    enabled = [u for u in await gw.list_users() if u.account_enabled and u.user_type.lower() == "member" and u.upn]
+    users = [u for u in enabled if is_colleague(u.upn, domains)]
     _stats(sink, len(users), len(users))
-    sink(LogLine("info", f"{len(users)} enabled member user(s)"))
+    skipped = len(enabled) - len(users)
+    sink(LogLine("info", f"{len(users)} enabled member user(s)" + (f", {skipped} external/synced account(s) "
+                                                                     "left out" if skipped else "")))
+    if not domains and len(users) > 60:
+        sink(LogLine("warn", f"{len(users)} people: if that is more than your colleagues, set domains = "
+                             "[\"contoso.com\"] in the registry file to limit the inventory to your own domain(s)."))
 
     sink(PhaseChanged("licences"))
     skus = await _optional(sink, "licences", gw.subscribed_skus(), {})

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Onboarding is its own tool: `3 onboard` on the home screen (`m365 onboard tui`). A guided flow: new person
+  (like a colleague or a bundle, plus add-ons) with a preview of group changes, manual items and the registry
+  entry; offboard; check one person; inventory right there when there is no snapshot; recent runs on the left.
+  The groups screen no longer has `o` / `x`.
+- Quitting always asks. `esc` always goes back one step and, from the top of a tool, to home. `ctrl+1/2/3`
+  jump between tools (and `1/2/3` on the onboard screen); the header shows the other tools; every help screen
+  explains back and switch.
 - The TUI is now the **m365 toolbox**: `m365` opens a home screen listing the tools with their last run
   (`1` spmig, `2` groups, `t` switch tenant, `ctrl+l` sign in); `g` returns home from any tool when nothing
   runs. Every screen shares one header: the mark and name, the current tool, tenant and signed-in account.

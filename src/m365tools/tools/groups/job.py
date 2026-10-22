@@ -101,7 +101,8 @@ class GroupsJob:
     async def _snap(self) -> Snapshot:
         if self.snapshot is None:
             self.clock.reset()
-            self.snapshot = await build_snapshot(self.gateway, self.registry.prefix, self.sink)
+            self.snapshot = await build_snapshot(self.gateway, self.registry.prefix, self.sink,
+                                                domains=self.registry.domains)
         return self.snapshot
 
     def _report(self, run_dir: Path, report: Any) -> None:

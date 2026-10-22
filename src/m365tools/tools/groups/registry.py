@@ -22,7 +22,7 @@ from .models import DEFAULT_PREFIX, Bundle, GroupEntry, PersonEntry, Registry, k
 _GROUP_KEYS = ("id", "kind", "purpose", "owner")
 _BUNDLE_KEYS = ("purpose", "groups")
 _PERSON_KEYS = ("bundles", "addons", "note", "offboarded")
-_TOP_KEYS = ("prefix", "groups", "bundles", "people")
+_TOP_KEYS = ("prefix", "domains", "groups", "bundles", "people")
 
 
 def _split(d: dict[str, Any], known: tuple[str, ...]) -> dict[str, Any]:
@@ -35,7 +35,8 @@ def _strs(v: Any) -> list[str]:
 
 def registry_from_dict(raw: dict[str, Any]) -> Registry:
     prefix = str(raw.get("prefix") or DEFAULT_PREFIX)
-    reg = Registry(prefix=prefix, extra=_split(raw, _TOP_KEYS))
+    reg = Registry(prefix=prefix, domains=[d.lower().lstrip("@") for d in _strs(raw.get("domains"))],
+                   extra=_split(raw, _TOP_KEYS))
     for name, g in (raw.get("groups") or {}).items():
         g = g if isinstance(g, dict) else {}
         reg.groups[name] = GroupEntry(name=name, id=str(g.get("id", "")), kind=str(g.get("kind") or
@@ -59,7 +60,7 @@ def _drop_empty(d: dict[str, Any], keep: tuple[str, ...] = ()) -> dict[str, Any]
 
 
 def registry_to_dict(reg: Registry) -> dict[str, Any]:
-    out: dict[str, Any] = {"prefix": reg.prefix, **reg.extra}
+    out: dict[str, Any] = {"prefix": reg.prefix, "domains": list(reg.domains), **reg.extra}
     out["groups"] = {g.name: {**_drop_empty({"id": g.id, "kind": g.kind, "owner": g.owner}),
                               "purpose": g.purpose, **g.extra} for g in reg.groups.values()}
     out["bundles"] = {b.name: {"purpose": b.purpose, "groups": list(b.groups), **b.extra}

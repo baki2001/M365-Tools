@@ -75,6 +75,9 @@ class Workspace(Screen[None]):
         Binding("question_mark", "help", "help", key_display="?"),
         Binding("ctrl+l", "app.login", "sign in", show=False),
         Binding("g", "app.go_home", "home", priority=True),
+        Binding("ctrl+1", "app.tool(1)", "spmig", show=False, priority=True),
+        Binding("ctrl+2", "app.tool(2)", "groups", show=False, priority=True),
+        Binding("ctrl+3", "app.tool(3)", "onboard", show=False, priority=True),
         Binding("q", "app.quit_app", "quit"),
     ]
 
@@ -174,8 +177,11 @@ class Workspace(Screen[None]):
         self.current.focus_primary()
 
     def action_back(self) -> None:
-        if self._main_focused() and not self.current.escape():
-            self.action_focus_sidebar()
+        if self._main_focused():
+            if not self.current.escape():
+                self.action_focus_sidebar()
+        else:
+            self.m365.action_go_home()
 
     # -- job actions (from anywhere) ----------------------------------------------------------------
 
@@ -242,7 +248,8 @@ class Workspace(Screen[None]):
                     ("ctrl+l", "sign in to a tenant"), ("?", "this help"), ("g", "toolbox home"), ("q", "quit")]
         left = Group(help_group(f"this section · {sec.NUMBER} {sec.TITLE}", own),
                      Text(""), help_group("lists and tables", lists))
-        right = Group(help_group("global · move around", move), Text(""), help_group("global · anywhere", anywhere))
+        right = Group(help_group("global · move around", move), Text(""), help_group("global · anywhere", anywhere),
+                      Text(""), help_group("back and switch", BACK_HELP))
         cols = Table.grid(expand=True, padding=(0, 4))
         cols.add_column(ratio=1)
         cols.add_column(ratio=1)
@@ -255,6 +262,10 @@ class Workspace(Screen[None]):
         names = {"slash": "/", "colon": ":", "question_mark": "?", "left_square_bracket": "[",
                  "right_square_bracket": "]", "plus": "+", "minus": "-"}
         return " ".join(names.get(k, k) for k in key.split(","))
+
+
+BACK_HELP = [("esc", "back one step; from the top of a tool: home"), ("g", "toolbox home"),
+             ("ctrl+1 2 3", "spmig / groups / onboard"), ("q", "quit (asks first)")]
 
 
 def help_group(title: str, rows: list[tuple[str, str]]) -> Group:

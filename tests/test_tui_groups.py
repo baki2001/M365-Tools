@@ -13,7 +13,7 @@ from m365tools.tools.groups.job import GroupsJob
 from m365tools.tui.app import M365App
 from m365tools.tui.groups import GroupList, GroupsScreen
 from m365tools.tui.home import HomeScreen, ToolList
-from m365tools.tui.modals import PickerModal, PromptModal, TextModal, TypedConfirmModal
+from m365tools.tui.modals import PromptModal, TextModal
 from m365tools.tui.workspace import Workspace
 
 from .fake_graph import FakeGraphGateway, make_fake, write_registry
@@ -61,9 +61,9 @@ async def test_home_lists_tools_and_opens_both(tmp_path):
         await pilot.pause()
         assert isinstance(app.screen, HomeScreen)
         tools = app.screen.query_one(ToolList)
-        assert tools.option_count == 2
+        assert tools.option_count == 3
         both = rendered(tools.get_option("spmig").prompt) + rendered(tools.get_option("groups").prompt)
-        assert "SharePoint library migration" in both and "access groups, drift and onboarding" in both
+        assert "SharePoint library migration" in both and "access groups, drift and the registry" in both
         assert "no runs yet" in both
         assert "m365 toolbox" in screen_text(app.screen.query_one("#header"))
 
@@ -203,70 +203,6 @@ async def test_drift_lists_findings_and_enter_jumps(tmp_path):
         await pilot.press("enter")
         await pilot.pause()
         assert screen.mode == "groups" and screen.current_row.key == "SG-Doc-Archive"
-
-
-async def test_onboard_preview_then_typed_apply(tmp_path):
-    env = Env(tmp_path)
-    app = make_app(env, start="groups")
-    async with app.run_test(size=(140, 45)) as pilot:
-        await inventory(app, pilot)
-        await pilot.press("o")
-        await pilot.pause()
-        assert isinstance(app.screen, PromptModal)
-        await pilot.press(*"jan@contoso.com", "enter")
-        await pilot.pause()
-        assert isinstance(app.screen, PickerModal)
-        await pilot.press(*"like dana", "enter")
-        await pilot.pause()
-        assert isinstance(app.screen, PickerModal)  # add-ons: first entry is "done"
-        await pilot.press("enter")
-        await settle(app, pilot)
-        screen = app.screen
-        assert isinstance(screen, GroupsScreen) and screen.view == "changes"
-        table = screen.query_one("#changes-table", DataTable)
-        assert table.row_count == 3  # Dana's Finance bundle
-        notes = rendered(screen.query_one("#changes-notes").content)
-        assert "like dana@contoso.com" in notes and "manual" in notes and "Payroll" in notes
-        assert not env.gw.writes()
-
-        await pilot.press("A")
-        await pilot.pause()
-        assert isinstance(app.screen, TypedConfirmModal) and app.screen.word == "apply"
-        await pilot.press(*"aply", "enter")
-        await pilot.pause()
-        assert isinstance(app.screen, TypedConfirmModal)  # wrong word: still asking
-        await pilot.press("escape")
-        await settle(app, pilot)
-        assert not env.gw.writes()
-
-        await pilot.press("A")
-        await pilot.pause()
-        await pilot.press(*"apply", "enter")
-        await settle(app, pilot)
-        assert {c[1] for c in env.gw.writes() if c[0] == "add_member"} == {
-            "SG-Doc-Finance", "SG-Doc-Hub", "SG-Lic-E3"}
-        assert "jan@contoso.com" in env.registry.read_text()
-        assert "done" in rendered(screen.query_one("#changes-head").content)
-        assert screen.snap_stale
-
-
-async def test_offboard_needs_the_word_offboard(tmp_path):
-    env = Env(tmp_path)
-    app = make_app(env, start="groups")
-    async with app.run_test(size=(140, 45)) as pilot:
-        await inventory(app, pilot)
-        await pilot.press("slash", *"anna", "enter")
-        await pilot.pause()
-        await pilot.press("x")
-        await settle(app, pilot)
-        screen = app.screen
-        assert screen.view == "changes" and screen.query_one("#changes-table", DataTable).row_count == 4
-        await pilot.press("A")
-        await pilot.pause()
-        assert isinstance(app.screen, TypedConfirmModal) and app.screen.word == "offboard"
-        await pilot.press(*"offboard", "enter")
-        await settle(app, pilot)
-        assert sum(1 for c in env.gw.writes() if c[0] == "remove_member") == 4
 
 
 async def test_suggest_accept_writes_bundle_after_apply(tmp_path):

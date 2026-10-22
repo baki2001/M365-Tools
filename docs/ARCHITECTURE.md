@@ -56,7 +56,8 @@ src/m365tools/
     job.py         Job, RestGatewayFactory, BlockingFindingsError  — the only thing UI calls
   tools/groups/    see "groups tool" below
   tui/             Textual app "m365 toolbox": screens are modes (home.py HomeScreen, workspace.py spmig Workspace
-                   with sidebar + 7 sections, groups.py GroupsScreen explorer + groups_view.py renderers),
+                   with sidebar + 7 sections, groups.py GroupsScreen explorer + groups_view.py renderers, onboard.py
+                   OnboardScreen guided flow; both share GroupsOpsScreen),
                    shared HeaderBar/KeyBar, keyboard-only modals, command palette (screen entries via
                    palette_commands()); one operation at a time across tools (app.begin(name, listener, tool=));
                    calls only Job / GroupsJob + services

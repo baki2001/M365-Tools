@@ -274,8 +274,8 @@ def person_detail(d: dict[str, Any]) -> Group:
         parts.append(Text(""))
         if d["missing"]:
             parts.append(Text.assemble(("○ missing  ", PEACH), ("expected by a bundle or add-on but not a member: ",
-                                                                SUB), ("o", f"bold {BLUE}"),
-                                       (" onboard re-adds them", SUB)))
+                                                                SUB), ("onboard (3 on home)", f"bold {BLUE}"),
+                                       (" re-adds them", SUB)))
         if d["unexplained"]:
             parts.append(Text.assemble(("▲ unexplained  ", YELLOW),
                                        ("member, but no bundle or add-on says why: add an add-on or remove it", SUB)))

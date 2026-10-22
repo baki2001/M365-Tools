@@ -33,6 +33,7 @@ from .commands import M365Commands
 from .groups import GroupsScreen
 from .home import HomeScreen
 from .modals import AuthModal, Choice, ConfirmModal, PickerModal
+from .onboard import OnboardScreen
 from .theme import THEME, THEME_VARIABLES
 from .workspace import Workspace
 
@@ -55,8 +56,9 @@ class M365App(App[None]):
     CSS_PATH = "app.tcss"
     COMMANDS: ClassVar[set[Any]] = {M365Commands}
     BINDINGS: ClassVar[list[BindingType]] = [Binding("ctrl+q", "quit_app", "quit", show=False, priority=True)]
-    MODES: ClassVar[dict[str, Any]] = {"home": HomeScreen, "spmig": Workspace, "groups": GroupsScreen}
-    TOOLS: ClassVar[tuple[str, ...]] = ("spmig", "groups")
+    MODES: ClassVar[dict[str, Any]] = {"home": HomeScreen, "spmig": Workspace, "groups": GroupsScreen,
+                                     "onboard": OnboardScreen}
+    TOOLS: ClassVar[tuple[str, ...]] = ("spmig", "groups", "onboard")
 
     def __init__(
         self,
@@ -103,12 +105,13 @@ class M365App(App[None]):
         except (KeyError, StopIteration):
             raise LookupError("spmig is not open") from None
 
-    @property
-    def groups_screen(self) -> GroupsScreen | None:
-        try:
-            return next((s for s in self.get_screen_stack("groups") if isinstance(s, GroupsScreen)), None)
-        except KeyError:
-            return None
+    def groups_screens(self) -> list[Any]:
+        """The open screens that use the GroupsJob (groups, onboard)."""
+        out = []
+        for mode, cls in (("groups", GroupsScreen), ("onboard", OnboardScreen)):
+            with contextlib.suppress(KeyError):
+                out += [s for s in self.get_screen_stack(mode) if isinstance(s, cls)]
+        return out
 
     # -------------------------------------------------------------------------------------------- tools
 
@@ -119,6 +122,12 @@ class M365App(App[None]):
             self.notify(f"{self.busy} is running: wait until it finishes.", severity="warning")
             return
         self.switch_mode(tool)
+
+    def action_tool(self, number: int) -> None:
+        """ctrl+1/2/3 (and 1/2/3 where digits are free): jump straight to a tool."""
+        tools = self.TOOLS
+        if 1 <= number <= len(tools):
+            self.open_tool(tools[number - 1])
 
     def action_go_home(self) -> None:
         if self.current_mode == "home":
@@ -188,8 +197,7 @@ class M365App(App[None]):
         self.tenant, self.account = name, ""
         self._close_groups_job()
         self.refresh_header()
-        gs = self.groups_screen
-        if gs is not None:
+        for gs in self.groups_screens():
             gs.tenant_changed()
         self.notify(f"Tenant: {name}")
 
@@ -335,9 +343,8 @@ class M365App(App[None]):
             self.close_auth_prompt()
         if tenant != self.tenant:
             self._close_groups_job()
-            gs = self.groups_screen
             self.tenant = tenant
-            if gs is not None:
+            for gs in self.groups_screens():
                 gs.tenant_changed()
         self.tenant, self.account = tenant, ", ".join(accounts)
         self.refresh_header()
@@ -352,19 +359,22 @@ class M365App(App[None]):
 
     @work(group="quit", exclusive=True, exit_on_error=False)
     async def action_quit_app(self) -> None:
+        """Quitting always asks; while an operation runs the question says so and quitting stops it."""
+        if isinstance(self.screen, ConfirmModal) and getattr(self.screen, "is_quit", False):
+            return
         if self.busy == "migrate":
-            ok = await self.push_screen_wait(ConfirmModal(
-                "Quit during a migration?",
-                "Files in progress are finished, then the app quits.\nResume later with 4 Run -> r."))
-            if not ok:
-                return
-            if self.current_job is not None:
-                self.current_job.request_stop()
+            body = ("A migration is running. Files in progress are finished, then the app quits.\n"
+                    "Resume later with 4 Run -> r.")
         elif self.busy:
-            ok = await self.push_screen_wait(ConfirmModal(
-                f"Quit while {self.busy} runs?", "The operation is cancelled. Writes already made stay made."))
-            if not ok:
-                return
+            body = f"{self.busy} is running and will be stopped. Writes already made stay made."
+        else:
+            body = "y or enter quits, n or esc stays."
+        modal = ConfirmModal("Quit m365 toolbox?", body)
+        modal.is_quit = True  # type: ignore[attr-defined]
+        if not await self.push_screen_wait(modal):
+            return
+        if self.busy and self.current_job is not None and self.busy_tool == "spmig":
+            self.current_job.request_stop()
         self.exit()
 
     async def on_unmount(self) -> None:

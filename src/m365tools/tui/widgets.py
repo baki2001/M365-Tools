@@ -203,8 +203,13 @@ class HeaderBar(Widget):
         if self.tool:
             left.append("  ▸ ", style=DIM).append(self.tool, style=f"bold {MAUVE}")
         mid = Text()
+        if not self.tool:
+            mid.append_text(theme.key_hints([(str(i), t) for i, t in enumerate(app.TOOLS, 1)], sep="  "))
         if app.busy:
             mid.append_text(theme.pill(f"◐ {app.busy}", YELLOW)).append("   ")
+        if self.tool:
+            others = [(f"^{i}", t) for i, t in enumerate(app.TOOLS, 1) if t != self.tool]
+            mid.append_text(theme.key_hints(others, sep=" ")).append("   ")
         if self.tool == "spmig":
             mid.append("profile ", style=SUB).append(app.opts.profile or "unsaved",
                                                       style=FG if app.opts.profile else DIM)
@@ -216,7 +221,7 @@ class HeaderBar(Widget):
         return grid
 
 
-ESSENTIAL_KEYS = frozenset({":", "?", "q"})
+ESSENTIAL_KEYS = frozenset({":", "?", "q", "g"})
 
 
 def fit_keys(local: list[tuple[str, str]], glob: list[tuple[str, str]], width: int

@@ -196,6 +196,7 @@ class PersonEntry:
 @dataclass(slots=True)
 class Registry:
     prefix: str = DEFAULT_PREFIX
+    domains: list[str] = field(default_factory=list)  # only people whose UPN domain is listed (empty = all)
     groups: dict[str, GroupEntry] = field(default_factory=dict)
     bundles: dict[str, Bundle] = field(default_factory=dict)
     people: dict[str, PersonEntry] = field(default_factory=dict)  # key: lower-case UPN
