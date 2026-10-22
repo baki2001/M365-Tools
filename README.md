@@ -2,7 +2,8 @@
 
 Terminal tools for Microsoft 365 admins, built for Linux and WSL. One command, `m365`, opens the toolbox:
 pick a tool with `1`, `2` or `3`; `esc` steps back and ends at home, `g` goes home at once, `ctrl+1`/`2`/`3`
-jump between tools, and `q` quits (it asks first).
+jump between tools where the terminal supports it (otherwise `g` then the number), and `q` quits (it asks
+first).
 
 | Tool | What it does |
 |---|---|
@@ -132,7 +133,9 @@ Run `m365 tenant setup-help` once for the extra Graph permissions.
 m365            # then 2 for groups (or: m365 groups tui)
 ```
 
-An explorer: on the left a list with three tabs, **People**, **Groups** and **Bundles** (`1` `2` `3` or `t`),
+It opens on a **Get started** checklist (inventory, your own domain with `D`, import, purposes, bundles,
+drift) that always shows the next key to press; `0` or `esc` brings it back.
+On the left a list with three tabs, **Groups**, **People** and **Bundles** (`1` `2` `3` or `t`),
 `/` to filter, `j`/`k` to move. The right side shows what is highlighted: for a person their bundles,
 add-ons and every group with ● ok, ○ missing or ▲ unexplained, plus licences, apps and roles; for a group
 its purpose, owner, members and why each one is there. Actions: `i` inventory, `d` drift (`enter` on a

@@ -96,6 +96,28 @@ class M365App(App[None]):
         self.register_theme(THEME)
         self.theme = THEME.name
         self.switch_mode(self.start)
+        self.refresh_account()
+
+    def refresh_account(self) -> None:
+        """Show the signed-in account as soon as the token cache has one (any operation may have signed in)."""
+        if self.account or not self.tenant or not hasattr(self.clients, "cached_accounts"):
+            return
+        tenant = self.tenant
+
+        def read() -> None:
+            try:
+                accounts = self.clients.cached_accounts(tenant)
+            except Exception:  # noqa: BLE001 - best effort, the header just stays "not signed in"
+                return
+            if accounts:
+                self.call_from_thread(self._set_account, tenant, ", ".join(accounts))
+
+        self.run_worker(read, thread=True, group="account", exclusive=True, exit_on_error=False)
+
+    def _set_account(self, tenant: str, account: str) -> None:
+        if self.tenant == tenant and not self.account:
+            self.account = account
+            self.refresh_header()
 
     @property
     def workspace(self) -> Workspace:
@@ -197,6 +219,7 @@ class M365App(App[None]):
         self.tenant, self.account = name, ""
         self._close_groups_job()
         self.refresh_header()
+        self.refresh_account()
         for gs in self.groups_screens():
             gs.tenant_changed()
         self.notify(f"Tenant: {name}")
@@ -253,6 +276,7 @@ class M365App(App[None]):
         self.busy, self.busy_tool, self._listener = None, None, None
         self.close_auth_prompt()
         self.refresh_header()
+        self.refresh_account()
         if tool != "spmig":
             return
         with contextlib.suppress(Exception):

@@ -49,17 +49,18 @@ from .groups_view import (
     group_rows,
     people_rows,
     person_detail,
+    snapshot_age,
     state_ribbon,
 )
-from .modals import PromptModal, TextModal, TypedConfirmModal
+from .modals import ConfirmModal, PromptModal, TextModal, TypedConfirmModal
 from .sections.base import Empty
-from .theme import DIM, FG, MAUVE, PEACH, SEVERITY_STYLE, SUB, YELLOW
+from .theme import DIM, FG, GREEN, MAUVE, PEACH, SEVERITY_STYLE, SUB, YELLOW
 from .widgets import Activity, BarList, BarOption, HeaderBar, KeyBar, StepList, VimLog, VimScroll, VimTable
 
 if TYPE_CHECKING:
     from .app import M365App
 
-TABS = (("people", "People"), ("groups", "Groups"), ("bundles", "Bundles"))
+TABS = (("groups", "Groups"), ("people", "People"), ("bundles", "Bundles"))
 SEV_ORDER = {"blocking": 0, "warn": 1, "info": 2}
 
 HELP = {
@@ -192,19 +193,21 @@ class GroupsScreen(GroupsOpsScreen):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("tab,shift+tab", "toggle_pane", "switch pane", show=False),
         Binding("escape", "back", "back", show=False),
-        Binding("1", "tab('people')", "people", show=False),
-        Binding("2", "tab('groups')", "groups", show=False),
+        Binding("1", "tab('groups')", "tabs", key_display="1/2/3"),
+        Binding("2", "tab('people')", "people", show=False),
         Binding("3", "tab('bundles')", "bundles", show=False),
+        Binding("0", "start", "get started", show=False),
         Binding("t", "next_tab", "tab", show=False),
         Binding("slash", "filter", "filter", key_display="/"),
+        Binding("i", "inventory", "inventory"),
+        Binding("m", "import_groups", "import"),
+        Binding("e", "edit", "edit"),
+        Binding("s", "suggest", "suggest"),
+        Binding("d", "drift", "drift"),
+        Binding("y", "sync", "sync"),
         Binding("a", "accept", "accept"),
         Binding("A", "apply", "apply"),
-        Binding("i", "inventory", "inventory"),
-        Binding("d", "drift", "drift"),
-        Binding("s", "suggest", "suggest"),
-        Binding("y", "sync", "sync"),
-        Binding("m", "import_groups", "import", show=False),
-        Binding("e", "edit", "edit"),
+        Binding("D", "domains", "domains", show=False),
         Binding("r", "reload", "reload", show=False),
         Binding("L", "toggle_log", "log", show=False),
         Binding("colon", "app.command_palette", "commands", key_display=":"),
@@ -219,7 +222,7 @@ class GroupsScreen(GroupsOpsScreen):
 
     def __init__(self) -> None:
         super().__init__()
-        self.mode = "people"
+        self.mode = "groups"
         self.filter_text = ""
         self.rows: list[Row] = []
         self.snap: Snapshot | None = None
@@ -228,7 +231,7 @@ class GroupsScreen(GroupsOpsScreen):
         self.local_findings: list[Finding] = []
         self.findings: list[Finding] = []
         self.suggestion: Any = None
-        self.view = "detail"
+        self.view = "start"
         self.subject: str | None = None  # Row id shown in the detail
         self.back_view: str | None = None  # where esc returns to from a detail opened by a jump
         self.pending: tuple[str, str, Callable[[Any], Awaitable[Any]], Callable[[Any], None]] | None = None
@@ -249,7 +252,10 @@ class GroupsScreen(GroupsOpsScreen):
                 yield Static("", id="glist-empty")
             with Vertical(id="gmain"):
                 yield Static("", id="gstate")
-                with ContentSwitcher(id="gswitch", initial="detail"):
+                with ContentSwitcher(id="gswitch", initial="start"):
+                    start = VimScroll(id="start", classes="gpanel")
+                    with start:
+                        yield Static("", id="start-body")
                     detail = VimScroll(id="detail", classes="gpanel")
                     with detail:
                         yield Static("", id="detail-body")
@@ -299,7 +305,7 @@ class GroupsScreen(GroupsOpsScreen):
             self.refresh_all()
             return
         self.pick_snapshot(job)
-        self.view = "detail"
+        self.view = "start"
         self.refresh_all()
 
     def tenant_changed(self) -> None:
@@ -357,11 +363,11 @@ class GroupsScreen(GroupsOpsScreen):
         counts = {"people": len(people_rows(self.snap, reg)), "groups": len(group_rows(self.snap, reg)),
                   "bundles": len(reg.bundles)}
         t = Text(no_wrap=True)
-        for key, title in TABS:
+        for i, (key, title) in enumerate(TABS, 1):
             if key == self.mode:
-                t.append_text(theme.pill(f"{title} {counts[key]}", MAUVE))
+                t.append_text(theme.pill(f"{i} {title} {counts[key]}", MAUVE))
             else:
-                t.append(f" {title} ", style=SUB).append(f"{counts[key]} ", style=DIM)
+                t.append_text(theme.chip(str(i))).append(f" {title}", style=FG)
             t.append(" ")
         self.query_one("#gtabs", Static).update(t)
         f = self.query_one("#gfilter", Static)
@@ -400,27 +406,73 @@ class GroupsScreen(GroupsOpsScreen):
             self.query_one("#gempty", Empty).update(theme.empty_text(
                 "groups cannot start", f"{self.error}\n\nAdd a tenant with: m365 tenant add NAME", []))
             return
+        if self.view == "detail" and self.current_row is None and self.subject is None:
+            self.view = "start"
+        if self.view == "start":
+            switch.current = "start"
+            self.query_one("#start-body", Static).update(self._start_card())
+            return
         if self.view == "detail":
             row = self.current_row
-            if row is None and self.subject is None:
-                switch.current = "gempty"
-                self.query_one("#gempty", Empty).update(self._empty_text())
-                return
             switch.current = "detail"
             self._render_detail(self.subject if self.subject and self.back_view else (row.id if row else
                                                                                       self.subject))
             return
         switch.current = self.view
 
-    def _empty_text(self) -> Text:
-        if self.snap is None and not self.registry.groups:
-            return theme.empty_text(
-                "No snapshot yet. Press i to run an inventory.",
-                "An inventory reads the prefix groups, users, licences, enterprise apps and admin roles of the "
-                "tenant.\nIt writes nothing; the snapshot stays on disk for the next time.",
-                [("i", "inventory"), ("?", "help")])
-        return theme.empty_text("Nothing selected", "Move through the list with j / k; the detail shows here.",
-                                [("/", "filter"), ("t", "next tab")])
+    def _start_card(self) -> Any:
+        """The "get started" checklist: what to do next, derived from the snapshot and the registry."""
+        from rich.console import Group
+
+        reg, snap = self.registry, self.snap
+        cats = [f.category for f in self.local_findings]
+        warn = sum(1 for f in self.local_findings if str(f.severity) == "warn")
+        info = sum(1 for f in self.local_findings if str(f.severity) == "info")
+        unreg = cats.count("unregistered")
+        lacking = [g for g in reg.groups.values() if not g.purpose.strip() or not g.owner.strip()]
+        n_people = len(snap.people) if snap else 0
+        steps: list[tuple[str, str, str, str]] = []  # (state, key, title, detail)
+        steps.append(("done" if snap else "todo", "i", "Run an inventory",
+                      f"snapshot {snapshot_age(snap.taken)}" if snap else "reads the tenant, writes nothing"))
+        if reg.domains:
+            steps.append(("done", "D", "Limit people to your own domain",
+                          f"{n_people} people at {', '.join(reg.domains)}" if snap else ", ".join(reg.domains)))
+        else:
+            steps.append(("doing" if snap else "todo", "D", "Limit people to your own domain",
+                          f"{n_people} people in the snapshot, external accounts included" if snap
+                          else "only colleagues, no partners or test accounts"))
+        steps.append(("todo" if snap is None else "doing" if unreg else "done", "m",
+                      "Import your groups into the registry",
+                      f"{unreg} group(s) not in the registry yet" if unreg else
+                      (f"{len(reg.groups)} groups registered" if snap else "after the inventory")))
+        steps.append(("todo" if not reg.groups else "doing" if lacking else "done", "e",
+                      "Give every group a purpose and owner",
+                      f"{len(lacking)} group(s) still lack one: 1, a group, then e" if lacking else
+                      ("all groups explained" if reg.groups else "after the import")))
+        steps.append(("done" if reg.bundles else "todo", "s", "Suggest bundles",
+                      f"{len(reg.bundles)} bundle(s): " + ", ".join(sorted(reg.bundles)) if reg.bundles
+                      else "role packages from who has what today"))
+        steps.append(("todo" if snap is None else "doing" if warn else "done", "d", "Check drift weekly",
+                      f"{warn} warn · {info} info" if snap else "after the inventory"))
+        glyph = {"done": ("●", GREEN), "doing": ("◐", YELLOW), "todo": ("○", DIM)}
+        nxt = next((i for i, st in enumerate(steps) if st[0] != "done"), None)
+        g = Text(no_wrap=True, overflow="ellipsis")
+        for i, (state, key, title, detail) in enumerate(steps):
+            gl, color = glyph[state]
+            g.append(f"{gl} ", style=color).append(f"{i + 1}  ", style=DIM).append_text(theme.chip(key))
+            g.append(f" {title}\n", style=f"bold {FG}" if i == nxt else FG)
+            g.append(f"         {detail}\n", style=SUB)
+        head = Text.assemble(("Get started", f"bold {MAUVE}"), ("   ", ""),
+                             (f"{sum(1 for st in steps if st[0] == 'done')} of {len(steps)} done", SUB))
+        parts: list[Any] = [head, Text(""), g]
+        if nxt is not None:
+            parts.append(Text.assemble(("next  ", DIM), (steps[nxt][2], f"bold {FG}"), ("  press ", SUB),
+                                       (steps[nxt][1], f"bold {theme.BLUE}")))
+        parts += [Text(""), Text.assemble(
+            ("1", f"bold {theme.BLUE}"), (" groups  ", SUB), ("2", f"bold {theme.BLUE}"), (" people  ", SUB),
+            ("3", f"bold {theme.BLUE}"), (" bundles  ", SUB), ("enter", f"bold {theme.BLUE}"), (" open  ", SUB),
+            ("0/esc", f"bold {theme.BLUE}"), (" back here", SUB))]
+        return Group(*parts)
 
     def _render_detail(self, row_id: str | None) -> None:
         body = self.query_one("#detail-body", Static)
@@ -487,7 +539,7 @@ class GroupsScreen(GroupsOpsScreen):
         return f is not None and self.query_one("#gmain") in f.ancestors
 
     def _focus_right(self) -> None:
-        target = {"detail": "#detail", "drift": "#drift-table", "suggest": "#suggest-table",
+        target = {"start": "#start", "detail": "#detail", "drift": "#drift-table", "suggest": "#suggest-table",
                   "changes": "#changes-table"}.get(self.view)
         if target and self.query_one(ContentSwitcher).current == self.view:
             self.query_one(target).focus()
@@ -497,6 +549,11 @@ class GroupsScreen(GroupsOpsScreen):
             self.query_one(GroupList).focus()
         else:
             self._focus_right()
+
+    def action_start(self) -> None:
+        self.back_view, self.pending = None, None
+        self.show_view("start")
+        self.query_one(GroupList).focus()
 
     def action_back(self) -> None:
         if self.view == "detail" and self.back_view:
@@ -510,14 +567,10 @@ class GroupsScreen(GroupsOpsScreen):
             self.show_view(back)
             self._focus_right()
             return
-        if self.view != "detail":
-            self.pending = None
-            self.show_view("detail")
-            self.query_one(GroupList).focus()
+        if self.view != "start":
+            self.action_start()
             return
-        if self._right_focused():
-            self.query_one(GroupList).focus()
-        elif self.filter_text:
+        if self.filter_text:
             self.filter_text = ""
             self._rebuild_list()
             self._render_view()
@@ -531,7 +584,7 @@ class GroupsScreen(GroupsOpsScreen):
         self.filter_text = ""
         self.back_view = None
         self.subject = None
-        self.view = "detail"
+        self.view = "start"
         self._rebuild_list()
         self._render_view()
         self.query_one(GroupList).focus()
@@ -878,6 +931,35 @@ class GroupsScreen(GroupsOpsScreen):
         self.notify(f"Registry reloaded: {len(reg.groups)} groups, {len(reg.bundles)} bundles, "
                     f"{len(reg.people)} people.")
 
+    @work(exclusive=True, group="gedit", exit_on_error=False)
+    async def action_domains(self) -> None:
+        if self.m365.busy:
+            self.notify(f"Busy: {self.m365.busy} is running.", severity="warning")
+            return
+        if self.job is None:
+            self.notify(self.error or "No tenant.", severity="error")
+            return
+        reg = self.registry
+        account = self.m365.account.split(",")[0].strip()
+        guess = ", ".join(reg.domains) or (account.rsplit("@", 1)[1] if "@" in account else "")
+        value = await self.app.push_screen_wait(PromptModal(
+            "Your own domains", guess, placeholder="contoso.com, contoso.nl",
+            note="Only people whose sign-in name ends in one of these count as colleagues. Partners, guests and "
+                 "test accounts on other domains are left out. Empty = everyone."))
+        if value is None:
+            return
+        reg.domains = [d.strip().lower().lstrip("@") for d in value.split(",") if d.strip()]
+        try:
+            self.job.save_registry()
+        except Exception as exc:  # noqa: BLE001 - shown to the user
+            self.m365.report_error(exc, "save registry")
+            return
+        self.refresh_all()
+        again = await self.app.push_screen_wait(ConfirmModal(
+            "Run the inventory again?", "The people list changes only after a new inventory. Run it now?"))
+        if again:
+            self.action_inventory()
+
     def action_toggle_log(self) -> None:
         self.log_open = not self.log_open
         self.query_one("#glog").display = self.log_open
@@ -890,20 +972,24 @@ class GroupsScreen(GroupsOpsScreen):
     def action_help(self) -> None:
         from .workspace import BACK_HELP, help_group
 
-        topic = self.view if self.view != "detail" else self.mode
-        browse = [("1 2 3", "People / Groups / Bundles"), ("t", "next tab"), ("j / k", "move"),
+        topic = self.mode if self.view in ("detail", "start") else self.view
+        browse = [("1 2 3", "Groups / People / Bundles"), ("0", "get started checklist"), ("t", "next tab"), ("j / k", "move"),
                   ("/", "filter the list"), ("enter", "open in the right pane"), ("tab", "switch list / right pane"),
                   ("esc", "back"), ("L", "show / hide the log")]
         actions = [("i", "inventory: read the tenant, writes nothing"), ("d", "drift: registry vs tenant"),
                    ("s", "suggest bundles (a accepts one)"), ("y", "sync: create registry groups in the tenant"),
                    ("m", "import tenant groups into the registry"), ("e", "edit purpose / owner of a group"),
-                   ("r", "reload the registry file"), ("A", "apply a preview (asks a typed word)")]
+                   ("r", "reload the registry file"), ("D", "your own domains (who counts as a colleague)"), ("A", "apply a preview (asks a typed word)")]
         glob = [(":", "command palette"), ("ctrl+l", "sign in"), ("?", "this help"), ("g", "toolbox home"),
                 ("q", "quit")]
         cols = Table.grid(expand=True, padding=(0, 4))
         cols.add_column(ratio=1)
         cols.add_column(ratio=1)
-        cols.add_row(Group(help_group("browse", browse), Text(""), help_group("anywhere", glob)),
+        legend = [("●", "matches the registry"), ("▲", "drift, or not in the registry (groups)"),
+                  ("○", "not in the registry yet / group not created"), ("◌", "registered, gone from the tenant"),
+                  ("⊘", "offboarded")]
+        cols.add_row(Group(help_group("browse", browse), Text(""), help_group("anywhere", glob), Text(""),
+                           help_group("glyphs in the list", legend)),
                      Group(help_group("actions", actions), Text(""), help_group("back and switch", BACK_HELP)))
         body = Group(Text(HELP[topic], style=SUB), Text(""), cols)
         self.app.push_screen(TextModal(f"Keys · groups · {topic}", body, fit=True))

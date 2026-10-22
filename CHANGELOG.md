@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Groups screen reworked for orientation: tabs with their keys (`1` Groups, the landing tab, `2` People,
+  `3` Bundles); a "Get started" checklist is the default right pane (`0` or `esc` returns to it) with the
+  next step and its key; `D` sets your own domains so only colleagues count; the People list shows a title or
+  domain instead of "unassigned"; help has a glyph legend. Tool switching is documented as `g` then `1/2/3`
+  (`ctrl+1/2/3` where the terminal sends it).
+- The header shows the signed-in account as soon as any operation has a token in the cache, not only after
+  `ctrl+l`.
 - Onboarding is its own tool: `3 onboard` on the home screen (`m365 onboard tui`). A guided flow: new person
   (like a colleague or a bundle, plus add-ons) with a preview of group changes, manual items and the registry
   entry; offboard; check one person; inventory right there when there is no snapshot; recent runs on the left.

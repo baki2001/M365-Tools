@@ -112,11 +112,15 @@ async def test_empty_state_then_inventory_fills_people(tmp_path):
         await pilot.pause()
         screen = app.screen
         assert "No snapshot yet. Press i to run an inventory." in rendered(screen.query_one("#gstate").content)
-        # registry people are listed before any inventory
+        # Groups is the landing tab; registry groups are listed before any inventory
+        assert screen.mode == "groups" and screen.view == "start"
         assert screen.query_one(GroupList).option_count == 8
         await inventory(app, pilot)
         assert screen.snap is not None and len(screen.snap.people) == 12
-        assert screen.query_one(GroupList).option_count == 12
+        assert screen.query_one(GroupList).option_count == 9  # 8 in the tenant + 1 only in the registry
+        await pilot.press("2")
+        await pilot.pause()
+        assert screen.mode == "people" and screen.query_one(GroupList).option_count == 12
         state = rendered(screen.query_one("#gstate").content)
         assert "12 people" in state and "unexplained" in state and "\n" in state and "snapshot just now" in state
         assert not env.gw.writes()
@@ -127,7 +131,7 @@ async def test_filter_and_enter_shows_person(tmp_path):
     app = make_app(env, start="groups")
     async with app.run_test(size=(140, 45)) as pilot:
         await inventory(app, pilot)
-        await pilot.press("slash")
+        await pilot.press("2", "slash")
         await pilot.pause()
         assert isinstance(app.screen, PromptModal)
         await pilot.press(*"evelien")
@@ -141,11 +145,11 @@ async def test_filter_and_enter_shows_person(tmp_path):
         await pilot.pause()
         assert screen.focused is screen.query_one("#detail")
         text = detail_text(app)
-        for word in ("Evelien Mulder", "Servicedesk", "SG-Doc-Finance", "add-on", "Intranet hub", "ENTERPRISEPACK",
+        for word in ("Evelien Mulder", "Servicedesk", "SG-Doc-Finance", "add-on", "Intranet hub", "Office 365 E3",
                      "Jira Cloud"):
             assert word in text, word
-        await pilot.press("escape")
-        assert screen.focused is screen.query_one(GroupList)
+        await pilot.press("escape")  # back to the get-started card, list focused
+        assert screen.focused is screen.query_one(GroupList) and screen.view == "start"
         await pilot.press("escape")  # clears the filter
         await pilot.pause()
         assert screen.query_one(GroupList).option_count == 12
@@ -156,11 +160,11 @@ async def test_groups_tab_and_edit_purpose_writes_registry(tmp_path):
     app = make_app(env, start="groups")
     async with app.run_test(size=(140, 45)) as pilot:
         await inventory(app, pilot)
-        await pilot.press("2")
+        await pilot.press("1")
         await pilot.pause()
         screen = app.screen
         assert screen.mode == "groups"
-        await pilot.press("slash", *"lic-e5", "enter")
+        await pilot.press("slash", *"lic-e5", "enter", "enter")
         await pilot.pause()
         assert screen.current_row.key == "SG-Lic-E5"
         assert "not set: press e" in detail_text(app)
@@ -281,3 +285,100 @@ def test_key_bar_keeps_essentials_when_narrow():
     loc, glo = fit_keys(local, glob, 70)
     keys = [k for k, _d in loc + glo]
     assert {":", "?", "q"} <= set(keys) and "j/k" not in keys
+
+
+def card(app) -> str:
+    return rendered(app.screen.query_one("#start-body", Static).content)
+
+
+def step(app, n: int) -> str:
+    lines = card(app).splitlines()
+    i = next(i for i, line in enumerate(lines) if line.strip().startswith(("●", "◐", "○"))
+             and f" {n} " in line[:6])
+    return lines[i].strip() + " " + lines[i + 1].strip()
+
+
+async def test_get_started_checklist_follows_state(tmp_path):
+    env = Env(tmp_path)
+    app = make_app(env, start="groups")
+    app.account = "admin@contoso.com"
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert "Get started" in card(app)
+        assert step(app, 1).startswith("○") and "Run an inventory" in step(app, 1)
+        await inventory(app, pilot)
+        assert step(app, 1).startswith("●") and "snapshot just now" in step(app, 1)
+        assert step(app, 2).startswith("◐") and "12 people" in step(app, 2)
+        assert step(app, 3).startswith("◐") and "1 group(s)" in step(app, 3)
+        assert step(app, 4).startswith("◐")
+        assert step(app, 5).startswith("●")  # the sample registry has bundles
+        # import: no unregistered groups left
+        await pilot.press("m")
+        await settle(app, pilot)
+        await pilot.press("A", *"apply", "enter")
+        await settle(app, pilot)
+        await pilot.press("0")
+        await pilot.pause()
+        assert screen.view == "start" and step(app, 3).startswith("●")
+        # D writes the domains (prefilled from the signed-in account), then offers a new inventory
+        await pilot.press("D")
+        await pilot.pause()
+        assert isinstance(app.screen, PromptModal)
+        assert app.screen.query_one("#prompt-input").value == "contoso.com"
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("n")
+        await settle(app, pilot)
+        assert screen.registry.domains == ["contoso.com"]
+        assert "domains" in env.registry.read_text() and '"contoso.com"' in env.registry.read_text()
+        assert step(app, 2).startswith("●")
+        # e on every group without purpose or owner turns step 4 green
+        for g in list(screen.registry.groups.values()):
+            g.purpose, g.owner = g.purpose or "x", g.owner or "ivo@contoso.com"
+        screen.refresh_all()
+        assert step(app, 4).startswith("●")
+
+
+async def test_zero_and_esc_return_to_the_card(tmp_path):
+    app = make_app(Env(tmp_path), start="groups")
+    async with app.run_test(size=(140, 45)) as pilot:
+        await inventory(app, pilot)
+        screen = app.screen
+        await pilot.press("j", "enter")
+        await pilot.pause()
+        assert screen.view == "detail"
+        await pilot.press("0")
+        await pilot.pause()
+        assert screen.view == "start"
+        await pilot.press("d")
+        await settle(app, pilot)
+        assert screen.view == "drift"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert screen.view == "start"
+
+
+async def test_header_picks_up_cached_account_after_an_operation(tmp_path):
+    from .test_tui import FakeClients
+
+    class Cached(FakeClients):
+        def __init__(self) -> None:
+            super().__init__()
+            self.signed_in = False
+
+        def cached_accounts(self, tenant: str) -> list[str]:
+            return ["admin@contoso.com"] if self.signed_in else []
+
+    env = Env(tmp_path)
+    clients = Cached()
+    app = M365App(make_cfg(), gateway_factory=lambda cfg, sink: None, clients=clients,  # type: ignore[arg-type]
+                  groups_job_factory=env.factory, start="groups")
+    async with app.run_test(size=(140, 45)) as pilot:
+        await settle(app, pilot)
+        assert app.account == ""
+        clients.signed_in = True  # the inventory acquired a token
+        await inventory(app, pilot)
+        await settle(app, pilot)
+        assert app.account == "admin@contoso.com"
+        assert "admin@contoso.com" in screen_text(app.screen.query_one("#header"))

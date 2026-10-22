@@ -424,6 +424,11 @@ PercentageStatus {
     border-left: outer $mauve;
 }
 
+#start-body {
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
 #gstate {
     height: auto;
     text-wrap: nowrap;

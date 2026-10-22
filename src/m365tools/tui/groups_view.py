@@ -120,7 +120,7 @@ def people_rows(snap: Snapshot | None, reg: Registry) -> list[Row]:
         elif e is not None:
             hint = ", ".join(e.bundles) or ("add-ons only" if e.addons else "no bundle")
         else:
-            hint = "unassigned"
+            hint = (p.job_title if p and p.job_title else upn.rsplit("@", 1)[-1])
         hay = " ".join([upn, name, p.job_title if p else "", p.department if p else "", hint]).lower()
         rows.append(Row(f"p:{upn}", name, hint, state, hay))
     return sorted(rows, key=lambda r: r.name.lower())

@@ -223,6 +223,10 @@ class TenantClients:
         await prov.token(sharepoint_scope(get_tenant(self.cfg, tenant)))
         return [str(a.get("username") or "?") for a in prov.accounts()]
 
+    def cached_accounts(self, tenant: str) -> list[str]:
+        """Accounts in the tenant's token cache (no network, no prompt)."""
+        return [str(a.get("username") or "?") for a in self.provider(tenant).accounts()]
+
     async def search_sites(self, tenant: str, query: str) -> list[Any]:
         from m365tools.core import sharepoint
 

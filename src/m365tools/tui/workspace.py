@@ -264,8 +264,9 @@ class Workspace(Screen[None]):
         return " ".join(names.get(k, k) for k in key.split(","))
 
 
-BACK_HELP = [("esc", "back one step; from the top of a tool: home"), ("g", "toolbox home"),
-             ("ctrl+1 2 3", "spmig / groups / onboard"), ("q", "quit (asks first)")]
+BACK_HELP = [("esc", "back one step; from the top of a tool: home"),
+             ("g  1/2/3", "home, then spmig / groups / onboard"),
+             ("ctrl+1 2 3", "jump straight there (not every terminal sends it)"), ("q", "quit (asks first)")]
 
 
 def help_group(title: str, rows: list[tuple[str, str]]) -> Group:
