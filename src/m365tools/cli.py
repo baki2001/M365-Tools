@@ -974,7 +974,7 @@ def groups_import(apply: ApplyOpt = False, tenant: TenantOpt = None, json_out: J
 @app.command("onboard")
 def onboard(
     target: Annotated[list[str], typer.Argument(metavar="UPN | check UPN",
-                                                help="The person to onboard, or 'check UPN' for their drift.")],
+                                                help="The person to onboard, 'check UPN' for their drift, or 'tui'.")],
     bundle: Annotated[list[str] | None, typer.Option("--bundle", "-b", help="Bundle (repeatable).")] = None,
     addon: Annotated[list[str] | None, typer.Option("--addon", "-a", help="Extra group (repeatable).")] = None,
     like: Annotated[str | None, typer.Option("--like", metavar="UPN", help="Copy this person's access.")] = None,
@@ -983,7 +983,11 @@ def onboard(
     """Add a person directly to every group of a bundle (+ add-ons), or like another person.
 
     Without --bundle/--like a registered person gets their registry entry re-applied (adds missing groups).
-    'm365 onboard check UPN' shows the drift for one person (exit 1 on warnings)."""
+    'm365 onboard check UPN' shows the drift for one person (exit 1 on warnings).
+    'm365 onboard tui' opens the onboard screen."""
+    if target == ["tui"]:
+        launch_tui("onboard")
+        return
     if target and target[0] == "check":
         if len(target) != 2:
             raise _fail(_console(), "usage: m365 onboard check UPN")

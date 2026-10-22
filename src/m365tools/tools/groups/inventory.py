@@ -4,18 +4,33 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Any, TypeVar
 
+from m365tools.core.errors import AccessDeniedError
 from m365tools.core.events import EventSink, LogLine, PhaseChanged, Stats, null_sink
 from m365tools.core.report.csv_ import write_csv
 
 from .gateway import GraphGateway
 from .models import AppInfo, GroupInfo, Person, RoleInfo, Snapshot, norm
 
+T = TypeVar("T")
+
 INVENTORY_PHASES: tuple[str, ...] = ("groups", "users", "licences", "apps", "roles", "report")
 
 
 def _stats(sink: EventSink, done: int, total: int) -> None:
     sink(Stats(done=done, total=total, bytes_done=0, bytes_total=0, mbps=0.0, eta_s=None, failed=0, warnings=0))
+
+
+async def _optional(sink: EventSink, what: str, coro: Any, fallback: T) -> T:
+    """Licences, apps and roles are nice to have: when the signed-in account lacks the permission, warn and
+    carry on with the groups and users instead of failing the whole inventory."""
+    try:
+        return await coro
+    except AccessDeniedError as exc:
+        sink(LogLine("warn", f"{what} skipped: access denied ({exc}). Grant the Graph permissions listed by "
+                             "'m365 tenant setup-help' and sign in again (ctrl+l) to include them."))
+        return fallback
 
 
 async def build_snapshot(gw: GraphGateway, prefix: str, sink: EventSink = null_sink) -> Snapshot:
@@ -45,18 +60,19 @@ async def build_snapshot(gw: GraphGateway, prefix: str, sink: EventSink = null_s
     sink(LogLine("info", f"{len(users)} enabled member user(s)"))
 
     sink(PhaseChanged("licences"))
-    skus = await gw.subscribed_skus()
+    skus = await _optional(sink, "licences", gw.subscribed_skus(), {})
     for u in sorted(users, key=lambda u: u.upn.lower()):
         snap.people.append(Person(
             id=u.id, upn=norm(u.upn), display_name=u.display_name, job_title=u.job_title,
             department=u.department, account_enabled=u.account_enabled,
             licences=sorted(skus.get(s, s) for s in u.sku_ids),
         ))
-    sink(LogLine("info", f"{len(skus)} subscribed SKU(s)"))
+    if skus:
+        sink(LogLine("info", f"{len(skus)} subscribed SKU(s)"))
 
     sink(PhaseChanged("apps"))
     upn_by_id = {u.id: norm(u.upn) for u in users}
-    apps = [a for a in await gw.list_apps() if a.assignment_required]
+    apps = [a for a in await _optional(sink, "apps", gw.list_apps(), []) if a.assignment_required]
     for i, a in enumerate(sorted(apps, key=lambda a: a.name.lower()), 1):
         info = AppInfo(id=a.id, name=a.name)
         for asg in await gw.app_assignments(a.id):
@@ -71,7 +87,7 @@ async def build_snapshot(gw: GraphGateway, prefix: str, sink: EventSink = null_s
     sink(LogLine("info", f"{len(snap.apps)} enterprise app(s) with assignment required"))
 
     sink(PhaseChanged("roles"))
-    roles = await gw.list_roles()
+    roles = await _optional(sink, "roles", gw.list_roles(), [])
     for i, r in enumerate(sorted(roles, key=lambda r: r.name.lower()), 1):
         members = await gw.role_members(r.id)
         snap.roles.append(RoleInfo(id=r.id, name=r.name,

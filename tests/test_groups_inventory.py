@@ -117,3 +117,26 @@ async def test_graph_calls_through_rest_gateway() -> None:
 def test_mail_nickname() -> None:
     assert mail_nickname("SG-Doc-Finance") == "SG-Doc-Finance"
     assert mail_nickname("ÄÖ ") == "group"
+
+
+async def test_inventory_survives_access_denied_on_optional_phases():
+    from m365tools.core.errors import AccessDeniedError
+    from m365tools.core.events import CollectingSink
+    from m365tools.tools.groups.inventory import build_snapshot
+
+    from .fake_graph import make_fake
+
+    gw = make_fake()
+
+    async def denied(*_a, **_k):
+        raise AccessDeniedError("Insufficient privileges")
+
+    gw.subscribed_skus = denied  # type: ignore[method-assign]
+    gw.list_apps = denied  # type: ignore[method-assign]
+    gw.list_roles = denied  # type: ignore[method-assign]
+    sink = CollectingSink()
+    snap = await build_snapshot(gw, "SG-", sink)
+    assert snap.people and snap.groups
+    assert snap.apps == [] and snap.roles == []
+    warns = [e for e in sink.events if getattr(e, "level", "") == "warn"]
+    assert len(warns) == 3

@@ -274,11 +274,13 @@ with admin consent like above:
        Microsoft Graph  Group.Read.All
        Microsoft Graph  User.Read.All
        Microsoft Graph  Directory.Read.All
+       Microsoft Graph  Organization.Read.All   (licence names)
        Microsoft Graph  Application.Read.All
   writing (groups sync, onboard, offboard):
        Microsoft Graph  Group.ReadWrite.All
        Microsoft Graph  GroupMember.ReadWrite.All
-  Licences and enterprise-app assignments are only read, never changed.
+  Licences and enterprise-app assignments are only read, never changed. After granting, sign in again
+  ("m365 tenant login <name>" or ctrl+l in the app) so the cached token picks up the new permissions.
 
 Then register the tenant with m365tools ("m365 tenant add"), giving the tenant id ({tenant_id}), the
 Application (client) ID and the SharePoint host (<yourtenant>.sharepoint.com), and test it with
