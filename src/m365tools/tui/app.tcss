@@ -347,7 +347,7 @@ PercentageStatus {
 
 /* ---------------------------------------------------------------- shared nav lists (home tools, groups list) */
 
-#tools > .option-list--option, #glist > .option-list--option, #oruns > .option-list--option {
+#tools > .option-list--option, #glist > .option-list--option {
     padding: 0 1;
 }
 
@@ -355,15 +355,13 @@ PercentageStatus {
     color: $base;
 }
 
-#tools > .option-list--option-highlighted, #glist > .option-list--option-highlighted,
-#oruns > .option-list--option-highlighted {
+#tools > .option-list--option-highlighted, #glist > .option-list--option-highlighted {
     background: $surface1;
     color: $foreground;
     text-style: none;
 }
 
-#tools:focus > .option-list--option-highlighted, #glist:focus > .option-list--option-highlighted,
-#oruns:focus > .option-list--option-highlighted {
+#tools:focus > .option-list--option-highlighted, #glist:focus > .option-list--option-highlighted {
     background: $mauve;
     color: $crust;
     text-style: none;
@@ -490,95 +488,6 @@ PercentageStatus {
 #glog:focus {
     border: round $mauve;
     border-title-color: $mauve;
-}
-
-/* ---------------------------------------------------------------- onboard flow */
-
-#onav {
-    width: 38;
-    height: 1fr;
-    background: $mantle;
-    padding: 1 0 0 0;
-}
-
-#oactions {
-    height: auto;
-    padding: 0 1;
-    margin: 0 0 1 0;
-}
-
-.onav-label {
-    height: 1;
-    padding: 0 1;
-    border-top: solid $surface0;
-}
-
-#oruns {
-    height: 1fr;
-    border: none;
-    padding: 0;
-    background: $mantle;
-    scrollbar-size-vertical: 1;
-}
-
-#oruns:focus {
-    border: none;
-    background-tint: $foreground 0%;
-}
-
-#oruns > .option-list--separator {
-    color: $mantle;
-}
-
-#oruns-empty {
-    height: auto;
-    padding: 0 1;
-}
-
-#omain {
-    width: 1fr;
-    height: 1fr;
-    padding: 1 2;
-    background: $base;
-    border-left: outer $base;
-}
-
-#omain:focus-within {
-    border-left: outer $mauve;
-}
-
-#oswitch {
-    height: 1fr;
-}
-
-#oswitch > Vertical {
-    height: 1fr;
-}
-
-#oswitch VimTable {
-    height: auto;
-    max-height: 1fr;
-}
-
-#oboxes {
-    height: auto;
-    margin: 1 0 0 0;
-}
-
-.obox {
-    width: 1fr;
-    height: auto;
-    min-height: 4;
-    border: round $surface1;
-    border-title-color: $subtext0;
-    border-title-style: bold;
-    padding: 0 1;
-}
-
-#omanual {
-    margin: 0 1 0 0;
-    border: round $peach 60%;
-    border-title-color: $peach;
 }
 
 /* ---------------------------------------------------------------- modals */

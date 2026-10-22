@@ -17,8 +17,7 @@ class M365Commands(Provider):
         cmds: list[tuple[str, Callable[[], Any], str]] = list(own()) if own is not None else []
         cmds += [
             ("Open spmig", partial(app.open_tool, "spmig"), "SharePoint library migration"),
-            ("Open groups", partial(app.open_tool, "groups"), "access groups, drift and the registry"),
-            ("Open onboard", partial(app.open_tool, "onboard"), "bring people in and out"),
+            ("Open groups", partial(app.open_tool, "groups"), "access groups, drift and onboarding"),
             ("Home", app.action_go_home, "the toolbox home screen  (g)"),
             ("Sign in", app.action_login, "log in / refresh the token for a tenant  (ctrl+l)"),
             ("Open runs folder", app.action_open_runs_dir, "show and copy the runs folder path"),

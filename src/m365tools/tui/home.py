@@ -1,6 +1,6 @@
 """The toolbox home: the mark, a one-line tagline and the tools, each with its last run.
 
-    1 2 3  enter   open a tool          j / k   move
+    1 / 2  enter   open a tool          j / k   move
     t              switch tenant        ctrl+l  sign in
     :              command palette      ?       help          q  quit
 """
@@ -39,8 +39,7 @@ class Tool:
     title: str
 
 
-TOOLS = (Tool("spmig", 1, "SharePoint library migration"), Tool("groups", 2, "access groups, drift and the registry"),
-         Tool("onboard", 3, "bring people in and out"))
+TOOLS = (Tool("spmig", 1, "SharePoint library migration"), Tool("groups", 2, "access groups, drift and onboarding"))
 TAGLINE = "Microsoft 365 admin from the terminal. Keyboard first; nothing is written until you confirm."
 
 
@@ -65,10 +64,8 @@ def last_run(tool: str, tenant: str | None) -> LastRun | None:
     """Newest run folder of ``tool`` (spmig: any profile; groups: the current tenant)."""
     from m365tools.services import list_group_runs
 
-    if tool in ("groups", "onboard"):
+    if tool == "groups":
         runs = list_group_runs(tenant) if tenant else list_group_runs()
-        people = ("onboard", "offboard")
-        runs = [r for r in runs if (_parse(r).mode in people) == (tool == "onboard")]
         return _parse(runs[0]) if runs else None
     from m365tools.core.paths import runs_dir
 
@@ -120,7 +117,7 @@ def mark() -> Table:
     logo = Text.assemble(("╭───╮\n", MAUVE), ("│ ", MAUVE), (MARK, f"bold {theme.LAVENDER}"), (" │\n", MAUVE),
                          ("╰───╯", MAUVE))
     words = Text.assemble((BRAND, f"bold {FG}"), "\n", ("tools for Microsoft 365 admins", SUB), "\n",
-                          ("spmig · groups · onboard", DIM))
+                          ("spmig · groups", DIM))
     grid = Table.grid(padding=(0, 2))
     grid.add_column(no_wrap=True)
     grid.add_column()
@@ -209,7 +206,7 @@ class HomeScreen(Screen[None]):
     def action_help(self) -> None:
         from .workspace import help_group
 
-        keys = [("1  2  3", "open spmig / groups / onboard"), ("enter", "open the highlighted tool"), ("j / k", "move"),
+        keys = [("1  2", "open spmig / groups"), ("enter", "open the highlighted tool"), ("j / k", "move"),
                 ("t", "switch tenant"), ("ctrl+l", "sign in"), (":", "command palette"), ("q", "quit")]
         tools = [(str(t.number), f"{t.key}: {t.title}") for t in TOOLS]
         body = Group(Text(self.HELP, style=SUB), Text(""), help_group("keys", keys), Text(""),

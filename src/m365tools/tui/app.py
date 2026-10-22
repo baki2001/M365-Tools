@@ -33,7 +33,6 @@ from .commands import M365Commands
 from .groups import GroupsScreen
 from .home import HomeScreen
 from .modals import AuthModal, Choice, ConfirmModal, PickerModal
-from .onboard import OnboardScreen
 from .theme import THEME, THEME_VARIABLES
 from .workspace import Workspace
 
@@ -56,9 +55,8 @@ class M365App(App[None]):
     CSS_PATH = "app.tcss"
     COMMANDS: ClassVar[set[Any]] = {M365Commands}
     BINDINGS: ClassVar[list[BindingType]] = [Binding("ctrl+q", "quit_app", "quit", show=False, priority=True)]
-    MODES: ClassVar[dict[str, Any]] = {"home": HomeScreen, "spmig": Workspace, "groups": GroupsScreen,
-                                     "onboard": OnboardScreen}
-    TOOLS: ClassVar[tuple[str, ...]] = ("spmig", "groups", "onboard")
+    MODES: ClassVar[dict[str, Any]] = {"home": HomeScreen, "spmig": Workspace, "groups": GroupsScreen}
+    TOOLS: ClassVar[tuple[str, ...]] = ("spmig", "groups")
 
     def __init__(
         self,
@@ -105,13 +103,12 @@ class M365App(App[None]):
         except (KeyError, StopIteration):
             raise LookupError("spmig is not open") from None
 
-    def groups_screens(self) -> list[Any]:
-        """The open screens that use the GroupsJob (groups, onboard)."""
-        out = []
-        for mode, cls in (("groups", GroupsScreen), ("onboard", OnboardScreen)):
-            with contextlib.suppress(KeyError):
-                out += [s for s in self.get_screen_stack(mode) if isinstance(s, cls)]
-        return out
+    @property
+    def groups_screen(self) -> GroupsScreen | None:
+        try:
+            return next((s for s in self.get_screen_stack("groups") if isinstance(s, GroupsScreen)), None)
+        except KeyError:
+            return None
 
     # -------------------------------------------------------------------------------------------- tools
 
@@ -191,7 +188,8 @@ class M365App(App[None]):
         self.tenant, self.account = name, ""
         self._close_groups_job()
         self.refresh_header()
-        for gs in self.groups_screens():
+        gs = self.groups_screen
+        if gs is not None:
             gs.tenant_changed()
         self.notify(f"Tenant: {name}")
 
@@ -337,8 +335,9 @@ class M365App(App[None]):
             self.close_auth_prompt()
         if tenant != self.tenant:
             self._close_groups_job()
+            gs = self.groups_screen
             self.tenant = tenant
-            for gs in self.groups_screens():
+            if gs is not None:
                 gs.tenant_changed()
         self.tenant, self.account = tenant, ", ".join(accounts)
         self.refresh_header()

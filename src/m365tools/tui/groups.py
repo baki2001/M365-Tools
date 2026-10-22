@@ -1,5 +1,4 @@
-"""The groups screen: an explorer over people, groups and bundles, with drift and registry upkeep as actions.
-Onboarding and offboarding have their own screen (onboard.py).
+"""The groups screen: an explorer over people, groups and bundles, with drift and onboarding as actions.
 
 Left: a filterable list in three tabs (People, Groups, Bundles). Right: the state of the registry and the
 snapshot, then the detail of what is highlighted (or the result of the last action: drift findings, bundle
@@ -7,7 +6,7 @@ suggestions, a preview of changes). An operation's step list and log sit at the 
 
     1 2 3  t     People / Groups / Bundles      /       filter            enter   open (right pane)
     tab          switch list <-> right pane     esc     back              L       show / hide the log
-    i  inventory    d  drift    s  suggest bundles    y  sync    m  import
+    i  inventory    d  drift    s  suggest bundles    y  sync    m  import    o  onboard    x  offboard
     e  edit purpose and owner    r  reload registry    A  apply the previewed changes (asks a typed word)
 
 Browsing is local: details are computed from the last snapshot (kept from the last inventory) and the registry,
@@ -51,7 +50,7 @@ from .groups_view import (
     person_detail,
     state_ribbon,
 )
-from .modals import PromptModal, TextModal, TypedConfirmModal
+from .modals import Choice, PickerModal, PromptModal, TextModal, TypedConfirmModal
 from .sections.base import Empty
 from .theme import DIM, FG, MAUVE, PEACH, SEVERITY_STYLE, SUB, YELLOW
 from .widgets import Activity, BarList, BarOption, HeaderBar, KeyBar, StepList, VimLog, VimScroll, VimTable
@@ -90,105 +89,7 @@ class GroupList(BarList):
     BINDINGS: ClassVar[list[BindingType]] = [Binding("enter", "select", "open")]
 
 
-class GroupsOpsScreen(Screen[None]):
-    """What the groups and onboard screens share: the GroupsJob of the current tenant, its snapshot, and running
-    an operation with the step list (``#gsteps``), activity line (``#gactivity``) and log (``#glog``)."""
-
-    snap: Snapshot | None = None
-    snap_origin = ""
-    snap_stale = False
-
-    @property
-    def m365(self) -> M365App:
-        return self.app  # type: ignore[return-value]
-
-    @property
-    def job(self) -> Any:
-        return self.m365.groups_current
-
-    @property
-    def registry(self) -> Registry:
-        job = self.job
-        return job.registry if job is not None else Registry()
-
-    def pick_snapshot(self, job: Any) -> None:
-        """The job's snapshot of this session, else the newest saved inventory."""
-        if job.snapshot is not None:
-            self.snap, self.snap_origin = job.snapshot, "this session"
-        else:
-            self.snap = self._saved_snapshot(job)
-            self.snap_origin = "last inventory" if self.snap else ""
-
-    @staticmethod
-    def _saved_snapshot(job: Any) -> Snapshot | None:
-        from m365tools.services import list_group_runs
-
-        with contextlib.suppress(Exception):
-            for run in list_group_runs(job.tenant, "inventory"):
-                path = run / "snapshot.json"
-                if path.exists():
-                    return Snapshot.from_json(json.loads(path.read_text(encoding="utf-8")))
-        return None
-
-    def write_log(self, ev: LogLine) -> None:
-        self.query_one("#glog", VimLog).write(theme.log_text(ev))
-
-    def on_job_event(self, ev: ProgressEvent) -> None:
-        steps = self.query_one("#gsteps", StepList)
-        if steps.running:
-            steps.feed(ev)
-        act = self.query_one("#gactivity", Activity)
-        if act.active:
-            act.feed(ev)
-
-    async def run_op(self, name: str, op: Callable[[Any], Awaitable[Any]]) -> tuple[bool, Any]:
-        """Run ``op(job)`` as operation ``name`` (one at a time across the toolbox). Never raises."""
-        app = self.m365
-        job = app.begin(name, self, tool="groups")
-        if job is None:
-            return False, None
-        steps, act = self.query_one("#gsteps", StepList), self.query_one("#gactivity", Activity)
-        use_steps = name == "inventory" or job.snapshot is None
-        if use_steps:
-            steps.start(name)
-        else:
-            steps.display = False
-            act.start(name)
-        ok, result = False, None
-        try:
-            result = await op(job)
-            ok = True
-        except Exception as exc:  # noqa: BLE001 - every failure becomes a toast + log line
-            app.report_error(exc, name)
-        finally:
-            if use_steps:
-                app.call_later(steps.finish, ok)
-            act.stop()
-            app.end()
-        if job.snapshot is not None and job.snapshot is not self.snap:
-            self.snap, self.snap_origin, self.snap_stale = job.snapshot, "this session", False
-        self.after_op()
-        return ok, result
-
-    def after_op(self) -> None:
-        """Re-render after an operation (override)."""
-
-
-    def on_screen_resume(self) -> None:
-        """Another screen may have taken a newer snapshot (or written to the registry) meanwhile."""
-        job = self.job
-        if job is not None and job.snapshot is not None and job.snapshot is not self.snap:
-            self.pick_snapshot(job)
-            self.snap_stale = False
-        if job is not None:
-            self.after_op()
-
-    def _names(self, upn: str) -> str:
-        p = self.snap.person(upn) if self.snap else None
-        return p.display_name if p and p.display_name else upn.split("@")[0]
-
-
-class GroupsScreen(GroupsOpsScreen):
+class GroupsScreen(Screen[None]):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("tab,shift+tab", "toggle_pane", "switch pane", show=False),
         Binding("escape", "back", "back", show=False),
@@ -202,9 +103,11 @@ class GroupsScreen(GroupsOpsScreen):
         Binding("i", "inventory", "inventory"),
         Binding("d", "drift", "drift"),
         Binding("s", "suggest", "suggest"),
-        Binding("y", "sync", "sync"),
+        Binding("y", "sync", "sync", show=False),
         Binding("m", "import_groups", "import", show=False),
-        Binding("e", "edit", "edit"),
+        Binding("o", "onboard", "onboard"),
+        Binding("x", "offboard", "offboard", show=False),
+        Binding("e", "edit", "edit", show=False),
         Binding("r", "reload", "reload", show=False),
         Binding("L", "toggle_log", "log", show=False),
         Binding("colon", "app.command_palette", "commands", key_display=":"),
@@ -233,6 +136,10 @@ class GroupsScreen(GroupsOpsScreen):
         self.error = ""
         self.log_open = False
         self._last_hl: str | None = None  # highlight set by code: its event is not a user move
+
+    @property
+    def m365(self) -> M365App:
+        return self.app  # type: ignore[return-value]
 
     # -------------------------------------------------------------------------------------------- layout
 
@@ -284,6 +191,15 @@ class GroupsScreen(GroupsOpsScreen):
 
     # -------------------------------------------------------------------------------------------- data
 
+    @property
+    def job(self) -> Any:
+        return self.m365.groups_current
+
+    @property
+    def registry(self) -> Registry:
+        job = self.job
+        return job.registry if job is not None else Registry()
+
     def load(self) -> None:
         """(Re)create the job for the current tenant, read its registry and the newest saved snapshot."""
         self.error = ""
@@ -295,15 +211,31 @@ class GroupsScreen(GroupsOpsScreen):
             self.error = str(exc)
             self.refresh_all()
             return
-        self.pick_snapshot(job)
+        if job.snapshot is not None:
+            self.snap, self.snap_origin = job.snapshot, "this session"
+        else:
+            self.snap = self._saved_snapshot(job)
+            self.snap_origin = "last inventory" if self.snap else ""
         self.view = "detail"
         self.refresh_all()
+
+    @staticmethod
+    def _saved_snapshot(job: Any) -> Snapshot | None:
+        from m365tools.services import list_group_runs
+
+        with contextlib.suppress(Exception):
+            for run in list_group_runs(job.tenant, "inventory"):
+                path = run / "snapshot.json"
+                if path.exists():
+                    return Snapshot.from_json(json.loads(path.read_text(encoding="utf-8")))
+        return None
 
     def tenant_changed(self) -> None:
         self.load()
 
-    def after_op(self) -> None:
-        self.refresh_all()
+    def _names(self, upn: str) -> str:
+        p = self.snap.person(upn) if self.snap else None
+        return p.display_name if p and p.display_name else upn.split("@")[0]
 
     # -------------------------------------------------------------------------------------------- rendering
 
@@ -595,6 +527,46 @@ class GroupsScreen(GroupsOpsScreen):
 
     # -------------------------------------------------------------------------------------------- operations
 
+    def write_log(self, ev: LogLine) -> None:
+        self.query_one("#glog", VimLog).write(theme.log_text(ev))
+
+    def on_job_event(self, ev: ProgressEvent) -> None:
+        steps = self.query_one("#gsteps", StepList)
+        if steps.running:
+            steps.feed(ev)
+        act = self.query_one("#gactivity", Activity)
+        if act.active:
+            act.feed(ev)
+
+    async def run_op(self, name: str, op: Callable[[Any], Awaitable[Any]]) -> tuple[bool, Any]:
+        """Run ``op(job)`` as operation ``name`` (one at a time across the toolbox). Never raises."""
+        app = self.m365
+        job = app.begin(name, self, tool="groups")
+        if job is None:
+            return False, None
+        steps, act = self.query_one("#gsteps", StepList), self.query_one("#gactivity", Activity)
+        use_steps = name == "inventory" or job.snapshot is None
+        if use_steps:
+            steps.start(name)
+        else:
+            steps.display = False
+            act.start(name)
+        ok, result = False, None
+        try:
+            result = await op(job)
+            ok = True
+        except Exception as exc:  # noqa: BLE001 - every failure becomes a toast + log line
+            app.report_error(exc, name)
+        finally:
+            if use_steps:
+                app.call_later(steps.finish, ok)
+            act.stop()
+            app.end()
+        if job.snapshot is not None and job.snapshot is not self.snap:
+            self.snap, self.snap_origin, self.snap_stale = job.snapshot, "this session", False
+        self.refresh_all()
+        return ok, result
+
     @work(exclusive=True, group="gop", exit_on_error=False)
     async def action_inventory(self) -> None:
         ok, snap = await self.run_op("inventory", lambda job: job.inventory())
@@ -815,6 +787,105 @@ class GroupsScreen(GroupsOpsScreen):
                                    lambda es: self._show_changes("Import: done", [
                                        ("add to registry", e.name, f"kind {e.kind}", "done") for e in es])))
 
+    # -- onboard / offboard -------------------------------------------------------------------------
+
+    @work(exclusive=True, group="gop", exit_on_error=False)
+    async def action_onboard(self) -> None:
+        if self.m365.busy:
+            self.notify(f"Busy: {self.m365.busy} is running.", severity="warning")
+            return
+        reg = self.registry
+        row = self.current_row
+        guess = row.key if row is not None and row.kind == "person" and reg.person(row.key) is None else ""
+        upn = await self.app.push_screen_wait(PromptModal(
+            "Onboard · who", guess, placeholder="new.colleague@contoso.com",
+            note="The person's UPN (sign-in name). They must already exist in Entra ID."))
+        if not upn or not upn.strip():
+            return
+        upn = upn.strip().lower()
+        choices = [Choice(f"bundle  {b.name}", ("bundle", b.name), f"{len(b.groups)} groups · {b.purpose}")
+                   for b in sorted(reg.bundles.values(), key=lambda b: b.name.lower())]
+        for r in people_rows(self.snap, reg):
+            if r.key != upn and r.state not in ("offboarded", "gone"):
+                choices.append(Choice(f"like  {r.name}", ("like", r.key), f"{r.key} · {r.hint}"))
+        if reg.person(upn) is not None:
+            choices.insert(0, Choice("their registry entry", ("registry", ""), "re-add what the registry says"))
+        how = await self.app.push_screen_wait(PickerModal(
+            f"Onboard {upn} · give access like", choices, placeholder="type a bundle or a person",
+            note="A bundle adds its groups. 'like' copies a colleague's bundles and add-ons."))
+        if how is None:
+            return
+        addons: list[str] = []
+        groups = sorted({r.name for r in group_rows(self.snap, reg)}, key=str.lower)
+        while True:
+            left = [Choice("done", None, "no more add-ons" if addons else "no add-ons")]
+            left += [Choice(g, g, (reg.group(g).purpose if reg.group(g) else "")) for g in groups
+                     if g not in addons]
+            pick = await self.app.push_screen_wait(PickerModal(
+                f"Onboard {upn} · add-ons" + (f" ({', '.join(addons)})" if addons else ""), left,
+                placeholder="type a group, or enter for done",
+                note="Extra groups on top of the bundle, for this person only. Pick 'done' to continue."))
+            if pick is None or pick == "done" or not isinstance(pick, str):
+                break
+            addons.append(pick)
+        kind, value = how
+        kwargs: dict[str, Any] = {"addons": tuple(addons)}
+        if kind == "bundle":
+            kwargs["bundles"] = (value,)
+        elif kind == "like":
+            kwargs["like"] = value
+        await self.preview_onboard(upn, kwargs)
+
+    async def preview_onboard(self, upn: str, kwargs: dict[str, Any]) -> None:
+        ok, plan = await self.run_op("onboard preview", lambda job: job.onboard(upn, apply=False, **kwargs))
+        if not ok or plan is None:
+            return
+        notes = Text.assemble(("from ", SUB), (plan.source, FG), ("   bundles ", SUB),
+                              (", ".join(plan.bundles) or "none", FG), ("   add-ons ", SUB),
+                              (", ".join(plan.addons) or "none", FG))
+        if plan.manual:
+            notes.append("\n\nmanual  ", style=f"bold {PEACH}")
+            notes.append("not set by this tool, do these in the admin center:\n", style=SUB)
+            for m in plan.manual:
+                notes.append(f"  ○ {m}\n", style=FG)
+        todo = [c for c in plan.changes if c.status == "planned"]
+        pending = None
+        if todo:
+            pending = ("apply", f"Add {upn} to {len(todo)} group(s)?",
+                       lambda job: job.onboard(upn, apply=True, **kwargs),
+                       lambda p: self._show_changes(f"Onboard {upn}: done",
+                                                    _member_rows(p, "add member", self.registry)))
+        self._show_changes(f"Onboard {upn}", _member_rows(plan, "add member", self.registry), notes=notes,
+                           pending=pending)
+
+    @work(exclusive=True, group="gop", exit_on_error=False)
+    async def action_offboard(self) -> None:
+        if self.m365.busy:
+            self.notify(f"Busy: {self.m365.busy} is running.", severity="warning")
+            return
+        row = self.current_row
+        upn = row.key if row is not None and row.kind == "person" else None
+        if upn is None:
+            upn = await self.app.push_screen_wait(PromptModal(
+                "Offboard · who", placeholder="leaver@contoso.com",
+                note="Removes the person from every registry group and marks them offboarded in the registry."))
+            if not upn or not upn.strip():
+                return
+            upn = upn.strip().lower()
+        ok, plan = await self.run_op("offboard preview", lambda job: job.offboard(upn, apply=False))
+        if not ok or plan is None:
+            return
+        rows = _member_rows(plan, "remove member", self.registry)
+        rows += [("keep", g, "not in the registry: left alone", "kept") for g in plan.kept]
+        todo = [c for c in plan.changes if c.status == "planned"]
+        notes = Text("Groups that are not in the registry are left alone; remove those by hand if needed. "
+                     "Licences, apps and roles are not touched.", style=SUB)
+        self._show_changes(f"Offboard {upn}", rows, notes=notes, pending=(
+            "offboard", f"Remove {upn} from {len(todo)} group(s) and mark them offboarded?",
+            lambda job: job.offboard(upn, apply=True),
+            lambda p: self._show_changes(f"Offboard {upn}: done",
+                                         _member_rows(p, "remove member", self.registry))))
+
     # -- registry edits ----------------------------------------------------------------------------
 
     def _selected_group(self) -> str | None:
@@ -891,7 +962,8 @@ class GroupsScreen(GroupsOpsScreen):
                   ("esc", "back"), ("L", "show / hide the log")]
         actions = [("i", "inventory: read the tenant, writes nothing"), ("d", "drift: registry vs tenant"),
                    ("s", "suggest bundles (a accepts one)"), ("y", "sync: create registry groups in the tenant"),
-                   ("m", "import tenant groups into the registry"), ("e", "edit purpose / owner of a group"),
+                   ("m", "import tenant groups into the registry"), ("o", "onboard a person"),
+                   ("x", "offboard the highlighted person"), ("e", "edit purpose / owner of a group"),
                    ("r", "reload the registry file"), ("A", "apply a preview (asks a typed word)")]
         glob = [(":", "command palette"), ("ctrl+l", "sign in"), ("?", "this help"), ("g", "toolbox home"),
                 ("q", "quit")]
@@ -910,6 +982,8 @@ class GroupsScreen(GroupsOpsScreen):
             ("Suggest bundles", self.action_suggest, "candidate bundles from who has what  (s)"),
             ("Sync registry to tenant", self.action_sync, "create missing registry groups, preview first  (y)"),
             ("Import tenant groups", self.action_import_groups, "add unregistered groups to the registry  (m)"),
+            ("Onboard a person", self.action_onboard, "add someone to the groups of a bundle  (o)"),
+            ("Offboard a person", self.action_offboard, "remove the highlighted person from registry groups  (x)"),
             ("Edit group purpose and owner", self.action_edit, "for the selected group  (e)"),
             ("Reload registry", self.action_reload, "re-read the registry file  (r)"),
             ("Show people", lambda: self.action_tab("people"), "(1)"),
