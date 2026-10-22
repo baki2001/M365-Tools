@@ -268,6 +268,18 @@ Option B - create a new one in the Entra admin center (https://entra.microsoft.c
      then click "Grant admin consent for <your tenant>" (requires a Global/Privileged Role Administrator).
   4. Copy the Application (client) ID from the Overview page.
 
+Extra Graph permissions for the groups tool (m365 groups / onboard / offboard), also *Delegated*, granted once
+with admin consent like above:
+  reading (inventory, suggest, drift, explain):
+       Microsoft Graph  Group.Read.All
+       Microsoft Graph  User.Read.All
+       Microsoft Graph  Directory.Read.All
+       Microsoft Graph  Application.Read.All
+  writing (groups sync, onboard, offboard):
+       Microsoft Graph  Group.ReadWrite.All
+       Microsoft Graph  GroupMember.ReadWrite.All
+  Licences and enterprise-app assignments are only read, never changed.
+
 Then register the tenant with m365tools ("m365 tenant add"), giving the tenant id ({tenant_id}), the
 Application (client) ID and the SharePoint host (<yourtenant>.sharepoint.com), and test it with
 "m365 tenant login".

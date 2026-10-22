@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- New tool `groups` (access-group registry): `m365 groups inventory|suggest|drift|explain|sync|import`,
+  `m365 onboard UPN` (`--bundle`, `--addon`, `--like`), `m365 onboard check UPN`, `m365 offboard UPN`. Writing
+  commands preview by default and need `--apply`. Per-tenant TOML registry in `~/.config/m365tools/groups/`.
+- Graph client: groups by prefix, members/owners, users with licences, subscribed SKUs, enterprise apps and their
+  assignments, directory roles, group creation and membership changes.
+- `m365 tenant setup-help` lists the extra Graph permissions the groups tool needs.
+
 ## 0.1.0 - 2026-10-21
 
 First release.

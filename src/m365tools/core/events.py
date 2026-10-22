@@ -20,11 +20,17 @@ PHASE_LABELS: dict[str, str] = {
     "plan": "plan",
     "checks": "checks",
     "report": "report",
+    # groups inventory (see GROUPS_PHASES)
+    "groups": "groups",
+    "licences": "licences",
+    "apps": "enterprise apps",
+    "roles": "directory roles",
 }
 AUDIT_PHASES: tuple[str, ...] = (
     "inventory.source", "permissions.source", "inventory.destination", "users", "checks", "report",
 )
 DRYRUN_PHASES: tuple[str, ...] = ("inventory.source", "permissions.source", "inventory.destination", "plan")
+GROUPS_PHASES: tuple[str, ...] = ("groups", "users", "licences", "apps", "roles", "report")
 SCAN_PHASES: frozenset[str] = frozenset(PHASE_LABELS) | {"inventory", "permissions"}
 
 

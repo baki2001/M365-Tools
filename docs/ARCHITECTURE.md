@@ -29,10 +29,13 @@ src/m365tools/
                    sharepoint_scope(tenant) = https://<host>/.default; GRAPH_SCOPE; tenant_setup_instructions(tenant_id)
     http.py        SpClient (see "HTTP client")
     sharepoint.py  SharePoint REST domain calls (see "SharePoint API surface")
-    graph.py       GraphClient(SpClient): search_sites, find_user_by_mail, list_users_by_local_part
+    graph.py       GraphClient(SpClient): search_sites, find_user_by_mail, list_users_by_local_part, and the groups
+                   calls (prefix groups, members/owners, users, subscribedSkus, servicePrincipals + appRoleAssignedTo,
+                   directoryRoles + members, create group, add/remove member)
     events.py      ProgressEvent dataclasses, EventSink protocol, null_sink, CollectingSink
     journal.py     Journal (append-only fsync'ed jsonl), StatusWriter (atomic status.json, >= 3 s apart)
-    report/        model.py (Report, Section), builders.py (audit/dryrun/migrate/verify/lock_report), html.py, text.py,
+    report/        model.py (Report, Section), builders.py (audit/dryrun/migrate/verify/lock_report), groups.py
+                   (groups reports), html.py, text.py,
                    csv_.py, json_.py, write_all(run_dir, report) -> report.html + report.txt
     errors.py      M365Error > ConfigError, AuthError, NotFoundError(available=[...]), AccessDeniedError,
                    ThrottledError(retry_after), TransferError, ValidationError
@@ -51,12 +54,15 @@ src/m365tools/
     lock.py        preview_lock(gw, lib, include_owners) / apply_lock(gw, lib, changes, sink)
     usermap.py     build_usermap(src_inv, dst_gw), save_usermap/load_usermap, UserMap (resolve(email))
     job.py         Job, RestGatewayFactory, BlockingFindingsError  — the only thing UI calls
+  tools/groups/    see "groups tool" below
   tui/             Textual app: one Workspace screen (sidebar + 7 sections: job, checks, plan, run, verify, lock,
                    runs), keyboard-only modals, command palette; calls only Job + services
   cli.py           typer app `m365`:
                      m365 tenant  add | list | login | setup-help
                      m365 profile list | show
                      m365 spmig   audit | dryrun | migrate | verify | lock | tui | sites
+                     m365 groups  inventory | suggest | drift | explain | sync | import
+                     m365 onboard UPN | onboard check UPN | offboard UPN
 ```
 
 Dependency direction: `core` has no knowledge of the CLI/TUI. `core.sharepoint` imports the `Item`/`LibraryRef` models
@@ -326,6 +332,67 @@ Optional profile keys: `overwrite` (`skip_if_same_or_newer` | `always` | `never`
 - Lock must only downgrade principals that hold Edit/Add/Delete/ManageLists; "Limited Access" entries untouched.
 - Dry run must not report percent based on bytes (showed 50%); use file count in dry run.
 - Ctrl+C mid-file: journal only after metadata step; resume re-copies that one file.
+
+## groups tool (tools/groups)
+
+Spec and decisions: [GROUPS-DESIGN.md](GROUPS-DESIGN.md). Flat `SG-<Kind>-<Name>` groups, one capability each;
+bundles exist only in the registry; onboarding adds people directly to each group.
+
+```
+models.py     Snapshot(prefix, taken, groups, people, apps, roles) with groups_of/apps_of/roles_of/capabilities(upn);
+              GroupInfo(id, name, description, security_enabled, mail_enabled, group_types, members[upn], owners);
+              Person(id, upn, display_name, job_title, department, account_enabled, licences[sku part number]);
+              AppInfo(id, name, users, groups); RoleInfo(id, name, members); Capability(kind, name).label
+              Registry(prefix, groups{name: GroupEntry}, bundles{name: Bundle}, people{upn: PersonEntry}, extra);
+              GroupEntry(name, id, kind, purpose, owner, extra); Bundle(name, purpose, groups, extra);
+              PersonEntry(upn, bundles, addons, note, offboarded, extra); Finding(severity, category, path, detail, fix)
+registry.py   load_registry/save_registry (unknown keys kept in `extra`; save merges with the file on disk, never
+              deletes an entry), expectations(reg, upn) = union(bundle groups) | addons (empty when offboarded)
+gateway.py    GraphGateway Protocol (Dir* records) + RestGraphGateway(GraphClient); tests: tests/fake_graph.py
+inventory.py  build_snapshot(gw, prefix, sink): phases groups -> users -> licences -> apps -> roles (GROUPS_PHASES
+              adds `report`, emitted by the job); enabled members only, guests skipped; matrix_rows / write_matrix_csv
+suggest.py    candidates / nearest (Jaccard) / suggest -> Suggestion(candidates, near); accept(reg, sug, {key: name})
+drift.py      findings(snap, reg) and person_findings(snap, reg, upn)
+explain.py    resolve_subject, explain_person, explain_group -> plain dicts
+sync.py       plan_sync/apply_sync (create missing groups, fill ids), plan_import/apply_import
+onboard.py    plan_onboard(bundles | like | registry entry)/apply_onboard, plan_offboard/apply_offboard
+job.py        GroupsJob
+```
+
+Finding categories: `warn` unexplained, missing, unregistered, not_created; `info` unassigned, no_owner, empty,
+no_purpose. `path` is the subject (UPN or group name); `fix` is the command or edit that resolves it.
+
+```python
+job = GroupsJob(gateway, registry_path, sink=null_sink, run_dir_factory=None, *, tenant="default")
+await job.inventory()                                        -> Snapshot
+await job.suggest()                                          -> Suggestion
+job.accept(sug, {"1": "Servicedesk"}, apply=False, include_near=True) -> list[str]
+await job.drift()                                            -> list[Finding]
+await job.explain(subject)                                   -> dict
+await job.onboard_check(upn)                                 -> list[Finding]
+await job.sync(apply=False)                                  -> SyncPlan
+await job.import_(apply=False)                               -> list[GroupEntry]
+await job.onboard(upn, bundles=(), addons=(), like=None, apply=False) -> OnboardPlan
+await job.offboard(upn, apply=False)                         -> OffboardPlan
+job.refresh(); job.reload_registry(); await job.aclose()
+```
+
+The first operation reads a snapshot and caches it in `job.snapshot` (`inventory()` always re-reads; every apply
+drops the cache). Registry writes go through `save_registry` and only with `apply=True`. After a run
+`job.run_dir`, `job.findings`, `job.registry` hold the last results. Services: `groups_tenant(cfg, name)`,
+`groups_registry_path(tenant)` (`<config_dir>/groups/<tenant>.toml`), `make_groups_job(cfg, tenant, sink,
+gateway=None)`, `list_group_runs(tenant=None, mode=None)`, `to_jsonable(obj)`.
+
+Run folders: `runs/groups-<tenant>/<YYYYmmdd-HHMMSS>-<mode>/` (no `tmp/`):
+
+| mode | files |
+|---|---|
+| inventory | `snapshot.json`, `matrix.csv`, `findings.csv`, `report.html`, `report.txt` |
+| drift | `findings.csv`, `report.html`, `report.txt` |
+| suggest | `candidates.csv`, `report.html`, `report.txt` |
+| sync / import / onboard / offboard | `<mode>.csv` (`Action;Subject;Detail;Status`), `report.html`, `report.txt` |
+
+`explain` and `onboard check` write no run folder.
 
 ## Testing
 

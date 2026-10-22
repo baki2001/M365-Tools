@@ -1,7 +1,10 @@
-"""``m365`` command line: tenants, profiles and the headless spmig runner (rich), plus the TUI launcher.
+"""``m365`` command line: tenants, profiles, the headless spmig runner and the groups tool (rich), plus the TUI
+launcher.
 
 Exit codes (spmig): 0 ok, 1 failures / blocking findings / errors, 2 migrate refused because of blocking
 findings (BlockingFindingsError), 130 interrupted (Ctrl+C).
+Exit codes (groups/onboard/offboard): 0 ok (previews too), 1 errors or a failed write; ``groups drift --strict``
+and ``onboard check`` also exit 1 on warnings.
 """
 
 import asyncio
@@ -58,9 +61,11 @@ from m365tools.services import (
     load_run_options,
     lock_change_to_json,
     make_gateway_factory,
+    make_groups_job,
     make_run_dir_factory,
     sorted_findings,
     summary_to_json,
+    to_jsonable,
 )
 from m365tools.tools.spmig.job import BlockingFindingsError, Job
 from m365tools.tools.spmig.models import Action, Endpoint, Finding, JobOptions, RunSummary, Severity
@@ -78,7 +83,10 @@ spmig_app = typer.Typer(help="SharePoint library migration: audit, dryrun, migra
                         no_args_is_help=True)
 app.add_typer(tenant_app, name="tenant")
 app.add_typer(profile_app, name="profile")
+groups_app = typer.Typer(help="SG-* access groups: inventory, suggest, drift, explain, sync, import.",
+                         no_args_is_help=True)
 app.add_typer(spmig_app, name="spmig")
+app.add_typer(groups_app, name="groups")
 
 LEVEL_STYLE = {"debug": "dim", "info": "", "ok": "green", "warn": "yellow", "error": "bold red"}
 SEVERITY_STYLE = {Severity.BLOCKING: "bold red", Severity.WARN: "yellow", Severity.INFO: "cyan"}
@@ -740,6 +748,293 @@ def sites(
 def tui() -> None:
     """Open the interactive terminal UI."""
     launch_tui()
+
+
+# ================================================================================================ groups
+
+TenantOpt = Annotated[str | None, typer.Option("--tenant", "-t", help="Tenant name (default: the only/first).")]
+JsonOpt = Annotated[bool, typer.Option("--json", help="Print the result as JSON on stdout.")]
+QuietOpt = Annotated[bool, typer.Option("--quiet", "-q", help="Only warnings, errors and the result.")]
+ApplyOpt = Annotated[bool, typer.Option("--apply", help="Apply the changes (default: preview only).")]
+STATUS_STYLE = {"planned": "yellow", "done": "green", "already": "dim", "not_created": "red", "failed": "bold red",
+                "kept": "dim", "manual": "magenta", "ok": "green", "missing": "yellow", "unexplained": "yellow"}
+
+
+def _groups_execute(title: str, tenant: str | None, json_out: bool, quiet: bool,
+                    op: Callable[[Any], Awaitable[Any]]) -> tuple[Any, Any, ConsoleRenderer]:
+    """Build a GroupsJob for the tenant and run ``op(job)`` with the shared renderer / Ctrl+C handling."""
+    console = _console(stderr=json_out)
+    cfg = _load_cfg(console)
+    renderer = ConsoleRenderer(console, quiet=quiet)
+    try:
+        job = make_groups_job(cfg, tenant, renderer)
+    except M365Error as exc:
+        raise _fail(console, str(exc)) from None
+    if not quiet:
+        console.print(Panel(f"tenant {escape(job.tenant)}\n[dim]registry: {escape(str(job.registry_path))}[/]",
+                            title=f"[{ACCENT}]m365 {title}[/]", border_style="cyan", expand=False))
+    try:
+        result, interrupted = _run_interruptible(job, op, renderer)
+    except M365Error as exc:
+        raise _fail(console, f"{type(exc).__name__}: {exc}") from None
+    if interrupted and result is None:
+        console.print("[yellow]! interrupted[/]")
+        raise typer.Exit(EXIT_INTERRUPTED)
+    return result, job, renderer
+
+
+def _groups_finish(console: Console, job: Any, json_out: bool, data: dict[str, Any], code: int = EXIT_OK) -> None:
+    _print_paths(console, job.run_dir)
+    if json_out:
+        _emit_json({"tenant": job.tenant, "registry": str(job.registry_path),
+                    "run_dir": str(job.run_dir) if job.run_dir else None, **data})
+    raise typer.Exit(code)
+
+
+def _changes_table(title: str, rows: list[tuple[str, str, str]]) -> Table:
+    t = Table(title=title, expand=True, border_style="dim")
+    t.add_column("Group", overflow="fold")
+    t.add_column("Detail", overflow="fold")
+    t.add_column("Status", no_wrap=True)
+    for group, detail, status in rows:
+        t.add_row(Text(group), Text(detail, style="dim"), Text(status, style=STATUS_STYLE.get(status, "")))
+    return t
+
+
+def _preview_note(console: Console, apply: bool, n: int, what: str) -> None:
+    if apply:
+        return
+    if n:
+        console.print(f"[yellow]![/] Preview only: {n} {what}. Re-run with --apply to apply.")
+    else:
+        console.print("[green]✓ Nothing to do.[/]")
+
+
+@groups_app.command("inventory")
+def groups_inventory(tenant: TenantOpt = None, json_out: JsonOpt = False, quiet: QuietOpt = False) -> None:
+    """Read SG-* groups, users, licences, enterprise apps and roles; write snapshot.json, matrix.csv, report."""
+    snap, job, r = _groups_execute("groups inventory", tenant, json_out, quiet, lambda job: job.inventory())
+    t = Table(title="inventory summary", show_header=False, border_style="dim")
+    t.add_column(style="bold")
+    t.add_column()
+    for k, v in [("Groups", len(snap.groups)), ("People", len(snap.people)), ("Enterprise apps", len(snap.apps)),
+                 ("Directory roles", len(snap.roles))]:
+        t.add_row(k, f"{v:,}")
+    t.add_row("Findings", _counts_line(job.findings))
+    r.console.print(t)
+    _groups_finish(r.console, job, json_out, {
+        "mode": "inventory", "groups": len(snap.groups), "people": len(snap.people), "apps": len(snap.apps),
+        "roles": len(snap.roles), "findings": [finding_to_json(f) for f in job.findings]})
+
+
+def _parse_accept(values: list[str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for v in values:
+        key, _, name = v.partition("=")
+        out[key.strip()] = name.strip()
+    return out
+
+
+@groups_app.command("suggest")
+def groups_suggest(
+    accept: Annotated[list[str] | None, typer.Option("--accept", metavar="KEY[=NAME]",
+                                                     help="Accept candidate KEY (number or proposed name), "
+                                                          "optionally renamed (repeatable).")] = None,
+    no_near: Annotated[bool, typer.Option("--exact-only", help="Accept only people with exactly the candidate's "
+                                                               "groups (not the nearest matches).")] = False,
+    apply: ApplyOpt = False, tenant: TenantOpt = None, json_out: JsonOpt = False, quiet: QuietOpt = False,
+) -> None:
+    """Propose bundles from shared group sets; --accept KEY=NAME (+ --apply) writes them to the registry."""
+    sug, job, r = _groups_execute("groups suggest", tenant, json_out, quiet, lambda job: job.suggest())
+    names = {c.key: c.name for c in sug.candidates}
+    t = Table(title="Candidate bundles", expand=True, border_style="dim")
+    for col, kw in [("#", {"no_wrap": True}), ("Proposed name", {}), ("Groups", {"overflow": "fold", "ratio": 3}),
+                    ("People", {"overflow": "fold", "ratio": 3})]:
+        t.add_column(col, **kw)
+    for c in sug.candidates:
+        name = Text(c.name, style="bold") + (Text(" (existing)", style="dim") if c.existing else Text(""))
+        t.add_row(c.key, name, Text(", ".join(c.groups)), Text(", ".join(c.people)))
+    r.console.print(t)
+    if sug.near:
+        n = Table(title="Everyone else: nearest candidate", expand=True, border_style="dim")
+        for col in ("Person", "Candidate", "Score", "+ addons", "- missing"):
+            n.add_column(col, overflow="fold")
+        for m in sug.near:
+            n.add_row(Text(m.upn), Text(names.get(m.candidate, "-")), f"{m.score:.2f}",
+                      Text(", ".join(m.addons), style="green"), Text(", ".join(m.missing), style="yellow"))
+        r.console.print(n)
+    changes: list[str] = []
+    if accept:
+        try:
+            changes = job.accept(sug, _parse_accept(accept), apply=apply, include_near=not no_near)
+        except KeyError as exc:
+            raise _fail(r.console, f"--accept: no candidate {exc}") from None
+        for line in changes:
+            r.console.print(f"  [green]+[/] {escape(line)}")
+        if apply:
+            r.console.print(f"[green]✓ {len(changes)} registry change(s) written.[/]")
+        _preview_note(r.console, apply, len(changes), "registry change(s)")
+    _groups_finish(r.console, job, json_out, {
+        "mode": "suggest", "candidates": to_jsonable(sug.candidates), "near": to_jsonable(sug.near),
+        "accepted": changes, "applied": bool(apply and accept)})
+
+
+@groups_app.command("drift")
+def groups_drift(
+    strict: Annotated[bool, typer.Option("--strict", help="Exit 1 when there are warnings.")] = False,
+    tenant: TenantOpt = None, json_out: JsonOpt = False, quiet: QuietOpt = False,
+) -> None:
+    """Compare the registry with the tenant: unexplained, missing, unregistered, not created, unassigned..."""
+    findings, job, r = _groups_execute("groups drift", tenant, json_out, quiet, lambda job: job.drift())
+    if findings:
+        r.console.print(findings_table(findings))
+        r.console.print(Text("Findings: ") + _counts_line(findings))
+    else:
+        r.console.print("[green]✓ No drift.[/]")
+    warn = any(f.severity == "warn" for f in findings)
+    _groups_finish(r.console, job, json_out, {"mode": "drift", "findings": [finding_to_json(f) for f in findings]},
+                   EXIT_FAIL if strict and warn else EXIT_OK)
+
+
+def _kv_table(title: str, rows: list[tuple[str, str]]) -> Table:
+    t = Table(title=title, show_header=False, box=None, padding=(0, 2))
+    t.add_column(style="bold")
+    t.add_column(overflow="fold")
+    for k, v in rows:
+        t.add_row(k, v or "-")
+    return t
+
+
+@groups_app.command("explain")
+def groups_explain(
+    subject: Annotated[str, typer.Argument(help="A UPN (or its unique local part) or a group name.")],
+    tenant: TenantOpt = None, json_out: JsonOpt = False, quiet: QuietOpt = True,
+) -> None:
+    """Why does a person have what they have / who is in a group and why."""
+    d, _job, r = _groups_execute("groups explain", tenant, json_out, quiet, lambda job: job.explain(subject))
+    c = r.console
+    if d["type"] == "person":
+        c.print(_kv_table(d["upn"], [
+            ("Name", d["name"]), ("Job title", d["job_title"]), ("Department", d["department"]),
+            ("Bundles", ", ".join(d["bundles"]) or ("(not registered)" if not d["registered"] else "")),
+            ("Add-ons", ", ".join(d["addons"])), ("Note", d["note"]), ("Offboarded", d["offboarded"]),
+            ("Licences", ", ".join(d["licences"])),
+            ("Apps", ", ".join(f"{a['app']} ({a['via']})" for a in d["apps"])), ("Roles", ", ".join(d["roles"]))]))
+        t = Table(title="Groups", expand=True, border_style="dim")
+        for col in ("Group", "Purpose", "Via", "Status"):
+            t.add_column(col, overflow="fold")
+        for g in d["groups"]:
+            t.add_row(Text(g["group"]), Text(g["purpose"], style="dim"), Text(g["via"]),
+                      Text(g["status"], style=STATUS_STYLE.get(g["status"], "")))
+        c.print(t)
+    else:
+        c.print(_kv_table(d["name"], [
+            ("Kind", d["kind"]), ("Purpose", d["purpose"] or ("(not registered)" if not d["registered"] else "")),
+            ("Owner (registry)", d["owner"]), ("Owners (tenant)", ", ".join(d["tenant_owners"])),
+            ("In tenant", "yes" if d["in_tenant"] else "no"), ("Bundles", ", ".join(d["bundles"])),
+            ("Add-on of", ", ".join(d["addon_of"])), ("Apps", ", ".join(d["apps"])),
+            ("Members", f"{len(d['members'])}: " + ", ".join(d["members"])),
+            ("Unexplained", ", ".join(d["unexplained"]))]))
+    if json_out:
+        _emit_json(d)
+
+
+@groups_app.command("sync")
+def groups_sync(apply: ApplyOpt = False, tenant: TenantOpt = None, json_out: JsonOpt = False,
+                quiet: QuietOpt = False) -> None:
+    """Registry -> tenant: create missing groups (security, mail-disabled) and record their ids."""
+    plan, job, r = _groups_execute("groups sync", tenant, json_out, quiet, lambda job: job.sync(apply=apply))
+    created, failed = dict(plan.created), dict(plan.failed)
+    rows = [(e.name, f"create: {e.purpose}",
+             ("done" if e.name in created else "failed") if apply else "planned") for e in plan.create]
+    rows += [(n, f"record id {gid}", "done" if apply else "planned") for n, gid in plan.fill_ids]
+    r.console.print(_changes_table("Sync " + ("(applied)" if apply else "preview"), rows))
+    for name, err in failed.items():
+        r.console.print(f"[bold red]✗[/] {escape(name)}: {escape(err)}")
+    _preview_note(r.console, apply, len(rows), "change(s)")
+    _groups_finish(r.console, job, json_out, {"mode": "sync", "applied": apply, "plan": to_jsonable(plan)},
+                   EXIT_FAIL if failed else EXIT_OK)
+
+
+@groups_app.command("import")
+def groups_import(apply: ApplyOpt = False, tenant: TenantOpt = None, json_out: JsonOpt = False,
+                  quiet: QuietOpt = False) -> None:
+    """Tenant -> registry: add unregistered prefix groups (purpose left empty for you to fill in)."""
+    entries, job, r = _groups_execute("groups import", tenant, json_out, quiet,
+                                      lambda job: job.import_(apply=apply))
+    r.console.print(_changes_table("Import " + ("(applied)" if apply else "preview"),
+                                   [(e.name, f"kind {e.kind}", "done" if apply else "planned") for e in entries]))
+    if apply and entries:
+        r.console.print(f"[green]✓ {len(entries)} group(s) added.[/] Fill in their purpose in "
+                        f"{escape(str(job.registry_path))}", soft_wrap=True)
+    _preview_note(r.console, apply, len(entries), "group(s) would be added to the registry")
+    _groups_finish(r.console, job, json_out, {"mode": "import", "applied": apply, "groups": to_jsonable(entries)})
+
+
+@app.command("onboard")
+def onboard(
+    target: Annotated[list[str], typer.Argument(metavar="UPN | check UPN",
+                                                help="The person to onboard, or 'check UPN' for their drift.")],
+    bundle: Annotated[list[str] | None, typer.Option("--bundle", "-b", help="Bundle (repeatable).")] = None,
+    addon: Annotated[list[str] | None, typer.Option("--addon", "-a", help="Extra group (repeatable).")] = None,
+    like: Annotated[str | None, typer.Option("--like", metavar="UPN", help="Copy this person's access.")] = None,
+    apply: ApplyOpt = False, tenant: TenantOpt = None, json_out: JsonOpt = False, quiet: QuietOpt = False,
+) -> None:
+    """Add a person directly to every group of a bundle (+ add-ons), or like another person.
+
+    Without --bundle/--like a registered person gets their registry entry re-applied (adds missing groups).
+    'm365 onboard check UPN' shows the drift for one person (exit 1 on warnings)."""
+    if target and target[0] == "check":
+        if len(target) != 2:
+            raise _fail(_console(), "usage: m365 onboard check UPN")
+        upn = target[1]
+        findings, job, r = _groups_execute("onboard check", tenant, json_out, quiet,
+                                           lambda job: job.onboard_check(upn))
+        if findings:
+            r.console.print(findings_table(findings))
+        else:
+            r.console.print(f"[green]✓ {escape(upn)} matches the registry.[/]")
+        if json_out:
+            _emit_json({"mode": "onboard check", "upn": upn, "findings": [finding_to_json(f) for f in findings]})
+        raise typer.Exit(EXIT_FAIL if any(f.severity == "warn" for f in findings) else EXIT_OK)
+    if len(target) != 1:
+        raise _fail(_console(), "give exactly one UPN (or: check UPN)")
+    upn = target[0]
+    plan, job, r = _groups_execute("onboard", tenant, json_out, quiet, lambda job: job.onboard(
+        upn, bundles=bundle or [], addons=addon or [], like=like, apply=apply))
+    rows = [(c.group, c.error or "", c.status) for c in plan.changes]
+    rows += [(m, "not set by this tool: assign by hand", "manual") for m in plan.manual]
+    title = f"Onboard {plan.upn} ({plan.source}: {', '.join(plan.bundles) or 'no bundle'})"
+    r.console.print(_changes_table(title + (" applied" if apply else " preview"), rows))
+    if plan.addons:
+        r.console.print(f"[dim]add-ons: {escape(', '.join(plan.addons))}[/]")
+    n = sum(1 for c in plan.changes if c.status in ("planned", "done", "failed"))
+    failed = sum(1 for c in plan.changes if c.status == "failed")
+    if apply:
+        r.console.print(f"[green]✓ {n - failed} membership(s) added, registry entry written.[/]")
+    _preview_note(r.console, apply, n, "membership(s) would be added")
+    _groups_finish(r.console, job, json_out, {"mode": "onboard", "applied": apply, "plan": to_jsonable(plan)},
+                   EXIT_FAIL if failed else EXIT_OK)
+
+
+@app.command("offboard")
+def offboard(
+    upn: Annotated[str, typer.Argument(help="The person leaving.")],
+    apply: ApplyOpt = False, tenant: TenantOpt = None, json_out: JsonOpt = False, quiet: QuietOpt = False,
+) -> None:
+    """Remove a person from every registry group and mark them offboarded (the account is not disabled)."""
+    plan, job, r = _groups_execute("offboard", tenant, json_out, quiet,
+                                   lambda job: job.offboard(upn, apply=apply))
+    rows = [(c.group, c.error or "remove", c.status) for c in plan.changes]
+    rows += [(g, "not in the registry: left alone", "kept") for g in plan.kept]
+    r.console.print(_changes_table(f"Offboard {plan.upn}" + (" applied" if apply else " preview"), rows))
+    failed = sum(1 for c in plan.changes if c.status == "failed")
+    if apply:
+        r.console.print(f"[green]✓ removed from {len(plan.changes) - failed} group(s); marked offboarded "
+                        f"{plan.date}.[/] The account itself is not disabled.")
+    _preview_note(r.console, apply, len(plan.changes), "membership(s) would be removed")
+    _groups_finish(r.console, job, json_out, {"mode": "offboard", "applied": apply, "plan": to_jsonable(plan)},
+                   EXIT_FAIL if failed else EXIT_OK)
 
 
 # ================================================================================================ tenant

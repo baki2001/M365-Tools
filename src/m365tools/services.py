@@ -247,3 +247,68 @@ class TenantClients:
         self._sp.clear()
         self._graph.clear()
         self._closing.clear()
+
+
+# ------------------------------------------------------------------------------------------------ groups
+
+
+def groups_tenant(cfg: AppConfig, name: str | None = None) -> str:
+    """The tenant a groups command works on: ``name`` if given (must exist), else the only/first tenant."""
+    if name:
+        get_tenant(cfg, name)
+        return name
+    if not cfg.tenants:
+        raise ConfigError("No tenants configured. Add one with: m365 tenant add NAME")
+    return next(iter(cfg.tenants))
+
+
+def groups_registry_path(tenant: str) -> Path:
+    """``<config_dir>/groups/<tenant>.toml``."""
+    from m365tools.core.paths import config_dir
+
+    return config_dir() / "groups" / f"{tenant}.toml"
+
+
+def make_groups_gateway(cfg: AppConfig, tenant: str, sink: EventSink = null_sink) -> Any:
+    """Production GraphGateway for ``tenant`` (one TokenProvider + GraphClient; closed by the job)."""
+    from m365tools.core.auth import TokenProvider
+    from m365tools.core.graph import GraphClient
+    from m365tools.tools.groups.gateway import RestGraphGateway
+
+    provider = TokenProvider(get_tenant(cfg, tenant), prompt=sink)
+    return RestGraphGateway(GraphClient(provider, sink=sink))
+
+
+def make_groups_job(cfg: AppConfig, tenant: str | None = None, sink: EventSink = null_sink,
+                    gateway: Any = None) -> Any:
+    """GroupsJob for ``tenant`` with its registry file and run folders under ``runs/groups-<tenant>/``."""
+    from m365tools.tools.groups.job import GroupsJob
+
+    name = groups_tenant(cfg, tenant)
+    gw = gateway if gateway is not None else make_groups_gateway(cfg, name, sink)
+    return GroupsJob(gw, groups_registry_path(name), sink, tenant=name)
+
+
+def list_group_runs(tenant: str | None = None, mode: str | None = None) -> list[Path]:
+    """groups run folders (newest first), optionally of one tenant and/or one mode."""
+    from m365tools.core.paths import runs_dir
+
+    root = runs_dir()
+    if not root.exists():
+        return []
+    parent = f"groups-{tenant}" if tenant else "groups-*"
+    runs = [p for p in root.glob(f"{parent}/*-{mode}*" if mode else f"{parent}/*") if p.is_dir()]
+    return sorted(runs, key=lambda p: p.name, reverse=True)
+
+
+def to_jsonable(obj: Any) -> Any:
+    """Dataclasses (plans, snapshots, findings) as plain JSON-able values."""
+    import dataclasses
+
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        return {k: to_jsonable(v) for k, v in asdict(obj).items()}
+    if isinstance(obj, list | tuple):
+        return [to_jsonable(x) for x in obj]
+    if isinstance(obj, dict):
+        return {str(k): to_jsonable(v) for k, v in obj.items()}
+    return obj if obj is None or isinstance(obj, str | int | float | bool) else str(obj)
