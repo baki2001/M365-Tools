@@ -125,5 +125,7 @@ tools/groups/
 
 CLI: `m365 groups inventory|suggest|drift|explain|sync|import` and `m365 onboard ...`,
 `m365 offboard ...`, all with `--tenant` (default: the only/first tenant) and `--json`.
-TUI: toolbox home (pick spmig / groups), groups workspace with sections
-**1 Inventory, 2 Groups, 3 People, 4 Bundles, 5 Drift, 6 Sync, 7 Onboard**, same keys, theme and widgets as spmig.
+TUI: `m365` opens a toolbox home (pick a tool). The groups screen shares the theme, vim keys, `:` palette,
+`?` help, key-chip bar, modals and step list with spmig, but its layout is designed for this tool, not copied:
+browsing people and groups is the core activity, so think explorer (list on the left, detail on the right,
+`/` to filter, `enter` to drill in, `esc` back) with drift and onboarding as actions, rather than a 7-step pipeline.
