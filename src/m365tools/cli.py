@@ -109,10 +109,10 @@ def _load_cfg(console: Console) -> AppConfig:
         raise _fail(console, str(exc)) from None
 
 
-def launch_tui() -> None:
+def launch_tui(start: str = "home") -> None:
     from m365tools.tui.app import M365App
 
-    M365App().run()
+    M365App(start=start).run()
 
 
 @app.callback()
@@ -746,8 +746,8 @@ def sites(
 
 @spmig_app.command("tui")
 def tui() -> None:
-    """Open the interactive terminal UI."""
-    launch_tui()
+    """Open the interactive terminal UI on the spmig screen."""
+    launch_tui("spmig")
 
 
 # ================================================================================================ groups
@@ -1171,6 +1171,12 @@ def profile_show(name: Annotated[str, typer.Argument(help="Profile name.")]) -> 
     t.add_row("Lock source after", "yes" if p.lock_source_after else "no")
     t.add_row("User map", p.usermap_path or "-")
     console.print(t, markup=False)
+
+
+@groups_app.command("tui")
+def groups_tui() -> None:
+    """Open the interactive terminal UI on the groups screen."""
+    launch_tui("groups")
 
 
 def main() -> None:  # pragma: no cover

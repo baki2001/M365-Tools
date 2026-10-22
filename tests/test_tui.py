@@ -70,7 +70,7 @@ def make_app(src: Any = None, dst: Any = None, clients: FakeClients | None = Non
         return Job(gateways, opts, sink, run_dir_factory, migrator_kwargs={"retry_pause": 0.0})
 
     return M365App(make_cfg(), job_cls=job_cls or real_job, gateway_factory=lambda cfg, sink: None,
-                   clients=clients or FakeClients())  # type: ignore[arg-type]
+                   clients=clients or FakeClients(), start="spmig")  # type: ignore[arg-type]
 
 
 async def settle(app: M365App, pilot: Any) -> None:

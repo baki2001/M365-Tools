@@ -1,0 +1,1023 @@
+"""The groups screen: an explorer over people, groups and bundles, with drift and onboarding as actions.
+
+Left: a filterable list in three tabs (People, Groups, Bundles). Right: the state of the registry and the
+snapshot, then the detail of what is highlighted (or the result of the last action: drift findings, bundle
+suggestions, a preview of changes). An operation's step list and log sit at the bottom of the right pane.
+
+    1 2 3  t     People / Groups / Bundles      /       filter            enter   open (right pane)
+    tab          switch list <-> right pane     esc     back              L       show / hide the log
+    i  inventory    d  drift    s  suggest bundles    y  sync    m  import    o  onboard    x  offboard
+    e  edit purpose and owner    r  reload registry    A  apply the previewed changes (asks a typed word)
+
+Browsing is local: details are computed from the last snapshot (kept from the last inventory) and the registry,
+so moving through the list never calls Microsoft Graph. Every action that writes shows a preview first.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+from collections.abc import Awaitable, Callable
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, ClassVar
+
+from rich.console import Group
+from rich.table import Table
+from rich.text import Text
+from textual import work
+from textual.app import ComposeResult
+from textual.binding import Binding, BindingType
+from textual.containers import Horizontal, Vertical
+from textual.screen import Screen
+from textual.widgets import ContentSwitcher, DataTable, OptionList, Static
+
+from m365tools.core.events import GROUPS_PHASES, LogLine, ProgressEvent
+from m365tools.tools.groups import drift as drift_mod
+from m365tools.tools.groups.explain import explain_group, explain_person
+from m365tools.tools.groups.models import Finding, GroupEntry, Registry, Snapshot, kind_of
+
+from . import theme
+from .groups_view import (
+    FINDING_LABEL,
+    Row,
+    bundle_detail,
+    bundle_rows,
+    change_status,
+    filtered,
+    group_detail,
+    group_rows,
+    people_rows,
+    person_detail,
+    state_ribbon,
+)
+from .modals import Choice, PickerModal, PromptModal, TextModal, TypedConfirmModal
+from .sections.base import Empty
+from .theme import DIM, FG, MAUVE, PEACH, SEVERITY_STYLE, SUB, YELLOW
+from .widgets import Activity, BarList, BarOption, HeaderBar, KeyBar, StepList, VimLog, VimScroll, VimTable
+
+if TYPE_CHECKING:
+    from .app import M365App
+
+TABS = (("people", "People"), ("groups", "Groups"), ("bundles", "Bundles"))
+SEV_ORDER = {"blocking": 0, "warn": 1, "info": 2}
+
+HELP = {
+    "people": ("People lists everyone in the tenant snapshot plus everyone in the registry. The glyph says how "
+               "they compare: ● matches the registry, ▲ has drift (a missing or unexplained group), ○ is not in "
+               "the registry yet, ◌ is in the registry but no longer in the tenant. Highlight someone to see "
+               "their bundles, add-ons and every group with why they have it. Nothing here writes anything."),
+    "groups": ("Groups lists every prefix group in the tenant and every group in the registry. ● is in both, "
+               "▲ exists in the tenant but nobody registered it (m imports it), ○ is in the registry but not "
+               "created yet (y creates it). e sets the purpose and owner: write them so a colleague knows what "
+               "the group gives access to and who approves new members."),
+    "bundles": ("Bundles are role packages kept in the registry, like 'Servicedesk': a list of groups someone in "
+                "that role needs. Onboarding a person with a bundle adds them to each of its groups. s suggests "
+                "bundles from who has what today."),
+    "drift": ("Drift compares the registry with the tenant. 'missing' means a bundle or add-on says the person "
+              "should be in a group but is not; 'unexplained' means they are in a group and nothing says why. "
+              "enter jumps to the person or group, esc comes back here. Nothing is changed by looking."),
+    "suggest": ("Suggestions group people by the exact set of groups they have. Each candidate could become a "
+                "bundle: a accepts the highlighted one under a name you choose and shows what the registry would "
+                "get; you confirm by typing apply. Only the registry file changes, never the tenant."),
+    "changes": ("A preview of changes. Nothing has been written yet: read the list, then A applies it after you "
+                "type the confirmation word. 'manual' items (licences, apps, roles) are not set by this tool; "
+                "do them in the admin center."),
+}
+
+
+class GroupList(BarList):
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("enter", "select", "open")]
+
+
+class GroupsScreen(Screen[None]):
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("tab,shift+tab", "toggle_pane", "switch pane", show=False),
+        Binding("escape", "back", "back", show=False),
+        Binding("1", "tab('people')", "people", show=False),
+        Binding("2", "tab('groups')", "groups", show=False),
+        Binding("3", "tab('bundles')", "bundles", show=False),
+        Binding("t", "next_tab", "tab", show=False),
+        Binding("slash", "filter", "filter", key_display="/"),
+        Binding("a", "accept", "accept"),
+        Binding("A", "apply", "apply"),
+        Binding("i", "inventory", "inventory"),
+        Binding("d", "drift", "drift"),
+        Binding("s", "suggest", "suggest"),
+        Binding("y", "sync", "sync", show=False),
+        Binding("m", "import_groups", "import", show=False),
+        Binding("o", "onboard", "onboard"),
+        Binding("x", "offboard", "offboard", show=False),
+        Binding("e", "edit", "edit", show=False),
+        Binding("r", "reload", "reload", show=False),
+        Binding("L", "toggle_log", "log", show=False),
+        Binding("colon", "app.command_palette", "commands", key_display=":"),
+        Binding("question_mark", "help", "help", key_display="?"),
+        Binding("ctrl+l", "app.login", "sign in", show=False),
+        Binding("g", "app.go_home", "home", priority=True),
+        Binding("q", "app.quit_app", "quit"),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.mode = "people"
+        self.filter_text = ""
+        self.rows: list[Row] = []
+        self.snap: Snapshot | None = None
+        self.snap_origin = ""
+        self.snap_stale = False
+        self.local_findings: list[Finding] = []
+        self.findings: list[Finding] = []
+        self.suggestion: Any = None
+        self.view = "detail"
+        self.subject: str | None = None  # Row id shown in the detail
+        self.back_view: str | None = None  # where esc returns to from a detail opened by a jump
+        self.pending: tuple[str, str, Callable[[Any], Awaitable[Any]], Callable[[Any], None]] | None = None
+        self.changes_from: str | None = None
+        self.error = ""
+        self.log_open = False
+        self._last_hl: str | None = None  # highlight set by code: its event is not a user move
+
+    @property
+    def m365(self) -> M365App:
+        return self.app  # type: ignore[return-value]
+
+    # -------------------------------------------------------------------------------------------- layout
+
+    def compose(self) -> ComposeResult:
+        yield HeaderBar("groups", id="header")
+        with Horizontal(id="body"):
+            with Vertical(id="gnav"):
+                yield Static("", id="gtabs")
+                yield Static("", id="gfilter")
+                yield GroupList(id="glist")
+                yield Static("", id="glist-empty")
+            with Vertical(id="gmain"):
+                yield Static("", id="gstate")
+                with ContentSwitcher(id="gswitch", initial="detail"):
+                    detail = VimScroll(id="detail", classes="gpanel")
+                    with detail:
+                        yield Static("", id="detail-body")
+                    with Vertical(id="drift"):
+                        yield Static("", id="drift-counts", classes="counts")
+                        yield VimTable(id="drift-table")
+                        yield Static("", id="drift-fix", classes="gnote")
+                    with Vertical(id="suggest"):
+                        yield Static("", id="suggest-head", classes="counts")
+                        yield VimTable(id="suggest-table")
+                        yield Static("", id="suggest-detail", classes="gnote")
+                    with Vertical(id="changes"):
+                        yield Static("", id="changes-head", classes="counts")
+                        yield VimTable(id="changes-table")
+                        yield Static("", id="changes-notes", classes="gnote")
+                    yield Empty("", id="gempty")
+                with Vertical(id="ops"):
+                    yield StepList(GROUPS_PHASES, id="gsteps")
+                    yield Activity(id="gactivity")
+                    log = VimLog(id="glog")
+                    log.border_title = "log"
+                    yield log
+        yield KeyBar(id="keybar")
+
+    def on_mount(self) -> None:
+        self.query_one("#drift-table", VimTable).add_fit_columns(("severity", 8), ("who", 24), ("what", None),
+                                                                  ("fix", None))
+        self.query_one("#suggest-table", VimTable).add_fit_columns(("#", 3), ("bundle name", 22), ("people", 7),
+                                                                    ("groups", None), ("exists as", 14))
+        self.query_one("#changes-table", VimTable).add_fit_columns(("action", 15), ("subject", 24), ("detail", None),
+                                                                    ("status", 18))
+        self.query_one("#glog").display = False
+        self.load()
+        self.query_one(GroupList).focus()
+
+    # -------------------------------------------------------------------------------------------- data
+
+    @property
+    def job(self) -> Any:
+        return self.m365.groups_current
+
+    @property
+    def registry(self) -> Registry:
+        job = self.job
+        return job.registry if job is not None else Registry()
+
+    def load(self) -> None:
+        """(Re)create the job for the current tenant, read its registry and the newest saved snapshot."""
+        self.error = ""
+        self.snap, self.snap_origin, self.snap_stale = None, "", False
+        self.findings, self.suggestion, self.pending = [], None, None
+        try:
+            job = self.m365.groups_job()
+        except Exception as exc:  # noqa: BLE001 - shown in the pane
+            self.error = str(exc)
+            self.refresh_all()
+            return
+        if job.snapshot is not None:
+            self.snap, self.snap_origin = job.snapshot, "this session"
+        else:
+            self.snap = self._saved_snapshot(job)
+            self.snap_origin = "last inventory" if self.snap else ""
+        self.view = "detail"
+        self.refresh_all()
+
+    @staticmethod
+    def _saved_snapshot(job: Any) -> Snapshot | None:
+        from m365tools.services import list_group_runs
+
+        with contextlib.suppress(Exception):
+            for run in list_group_runs(job.tenant, "inventory"):
+                path = run / "snapshot.json"
+                if path.exists():
+                    return Snapshot.from_json(json.loads(path.read_text(encoding="utf-8")))
+        return None
+
+    def tenant_changed(self) -> None:
+        self.load()
+
+    def _names(self, upn: str) -> str:
+        p = self.snap.person(upn) if self.snap else None
+        return p.display_name if p and p.display_name else upn.split("@")[0]
+
+    # -------------------------------------------------------------------------------------------- rendering
+
+    def refresh_all(self) -> None:
+        reg = self.registry
+        self.local_findings = drift_mod.findings(self.snap, reg) if self.snap is not None else []
+        self._rebuild_list()
+        self._render_state()
+        self._render_view()
+        self.refresh_bindings()
+
+    def _all_rows(self) -> list[Row]:
+        reg = self.registry
+        if self.mode == "people":
+            return people_rows(self.snap, reg)
+        if self.mode == "groups":
+            return group_rows(self.snap, reg)
+        return bundle_rows(reg)
+
+    def _rebuild_list(self, keep: str | None = None) -> None:
+        lst = self.query_one(GroupList)
+        if keep is None:
+            keep = self.current_row.id if self.current_row else self.subject
+        self.rows = filtered(self._all_rows(), self.filter_text)
+        lst.set_options([BarOption(_maker(r), id=r.id) for r in self.rows])
+        if self.rows:
+            ids = [r.id for r in self.rows]
+            idx = ids.index(keep) if keep in ids else 0
+            self._last_hl = ids[idx]
+            lst.highlighted = idx
+        self._render_tabs()
+        empty = self.query_one("#glist-empty", Static)
+        empty.display = not self.rows
+        if not self.rows:
+            if self.filter_text:
+                msg = Text.assemble(("Nothing matches ", SUB), (self.filter_text, f"bold {MAUVE}"), (".\n", SUB),
+                                    ("/ changes the filter, esc clears it.", DIM))
+            elif self.mode == "bundles":
+                msg = Text.assemble(("No bundles yet.\n", f"bold {FG}"),
+                                    ("Press s to suggest bundles from who has what today.", SUB))
+            else:
+                msg = Text.assemble((f"No {self.mode} yet.\n", f"bold {FG}"),
+                                    ("Press i to run an inventory.", SUB))
+            empty.update(msg)
+
+    def _render_tabs(self) -> None:
+        reg = self.registry
+        counts = {"people": len(people_rows(self.snap, reg)), "groups": len(group_rows(self.snap, reg)),
+                  "bundles": len(reg.bundles)}
+        t = Text(no_wrap=True)
+        for key, title in TABS:
+            if key == self.mode:
+                t.append_text(theme.pill(f"{title} {counts[key]}", MAUVE))
+            else:
+                t.append(f" {title} ", style=SUB).append(f"{counts[key]} ", style=DIM)
+            t.append(" ")
+        self.query_one("#gtabs", Static).update(t)
+        f = self.query_one("#gfilter", Static)
+        f.display = bool(self.filter_text)
+        if self.filter_text:
+            f.update(Text.assemble(("/ ", DIM), (self.filter_text, f"bold {MAUVE}"),
+                                   (f"  {len(self.rows)} shown", SUB)))
+
+    def _render_state(self) -> None:
+        job = self.job
+        name = job.registry_path.name if job is not None else "none"
+        if self.error:
+            self.query_one("#gstate", Static).update(Text(self.error, style=PEACH))
+            return
+        self.query_one("#gstate", Static).update(state_ribbon(
+            self.snap, self.registry, self.local_findings, origin=self.snap_origin, stale=self.snap_stale,
+            registry_name=name))
+
+    @property
+    def current_row(self) -> Row | None:
+        lst = self.query_one(GroupList)
+        idx = lst.highlighted
+        if idx is None or not 0 <= idx < len(self.rows):
+            return None
+        return self.rows[idx]
+
+    def show_view(self, view: str) -> None:
+        self.view = view
+        self._render_view()
+        self.refresh_bindings()
+
+    def _render_view(self) -> None:
+        switch = self.query_one(ContentSwitcher)
+        if self.error:
+            switch.current = "gempty"
+            self.query_one("#gempty", Empty).update(theme.empty_text(
+                "groups cannot start", f"{self.error}\n\nAdd a tenant with: m365 tenant add NAME", []))
+            return
+        if self.view == "detail":
+            row = self.current_row
+            if row is None and self.subject is None:
+                switch.current = "gempty"
+                self.query_one("#gempty", Empty).update(self._empty_text())
+                return
+            switch.current = "detail"
+            self._render_detail(self.subject if self.subject and self.back_view else (row.id if row else
+                                                                                      self.subject))
+            return
+        switch.current = self.view
+
+    def _empty_text(self) -> Text:
+        if self.snap is None and not self.registry.groups:
+            return theme.empty_text(
+                "No snapshot yet. Press i to run an inventory.",
+                "An inventory reads the prefix groups, users, licences, enterprise apps and admin roles of the "
+                "tenant.\nIt writes nothing; the snapshot stays on disk for the next time.",
+                [("i", "inventory"), ("?", "help")])
+        return theme.empty_text("Nothing selected", "Move through the list with j / k; the detail shows here.",
+                                [("/", "filter"), ("t", "next tab")])
+
+    def _render_detail(self, row_id: str | None) -> None:
+        body = self.query_one("#detail-body", Static)
+        if row_id is None:
+            body.update("")
+            return
+        self.subject = row_id
+        kind, key = row_id[0], row_id[2:]
+        snap = self.snap or Snapshot(self.registry.prefix, datetime.now())
+        try:
+            if kind == "p":
+                content: Any = person_detail(explain_person(snap, self.registry, key))
+            elif kind == "g":
+                content = group_detail(explain_group(snap, self.registry, key), self._names)
+            else:
+                content = bundle_detail(self.registry, self.snap, key, self._names)
+        except Exception as exc:  # noqa: BLE001 - shown in the pane
+            content = Text(f"{type(exc).__name__}: {exc}", style=PEACH)
+        if self.snap is None and kind != "b":
+            content = Group(content, Text(""), Text("No snapshot yet: only the registry side is shown. "
+                                                    "Press i to run an inventory.", style=YELLOW))
+        if self.back_view:
+            content = Group(Text.assemble(("esc ", f"bold {theme.BLUE}"), (f"back to {self.back_view}", SUB)),
+                            Text(""), content)
+        body.update(content)
+        self.query_one("#detail", VimScroll).scroll_home(animate=False)
+
+    # -------------------------------------------------------------------------------------------- list events
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if event.option_list.id != "glist" or not event.option.id or event.option.id == self._last_hl:
+            return
+        self._last_hl = event.option.id
+        if self.focused is event.option_list or self.view == "detail":
+            self.back_view = None
+            self.subject = event.option.id
+            if self.view != "detail":
+                self.view = "detail"
+            self._render_view()
+            self.refresh_bindings()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list.id == "glist":
+            self.back_view = None
+            self.subject = event.option.id
+            self.show_view("detail")
+            self.query_one("#detail").focus()
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        if event.data_table.id == "drift-table":
+            self._render_drift_fix()
+        elif event.data_table.id == "suggest-table":
+            self._render_candidate()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        event.stop()
+        if event.data_table.id == "drift-table":
+            self.jump_to_finding()
+
+    # -------------------------------------------------------------------------------------------- navigation
+
+    def _right_focused(self) -> bool:
+        f = self.focused
+        return f is not None and self.query_one("#gmain") in f.ancestors
+
+    def _focus_right(self) -> None:
+        target = {"detail": "#detail", "drift": "#drift-table", "suggest": "#suggest-table",
+                  "changes": "#changes-table"}.get(self.view)
+        if target and self.query_one(ContentSwitcher).current == self.view:
+            self.query_one(target).focus()
+
+    def action_toggle_pane(self) -> None:
+        if self._right_focused():
+            self.query_one(GroupList).focus()
+        else:
+            self._focus_right()
+
+    def action_back(self) -> None:
+        if self.view == "detail" and self.back_view:
+            back, self.back_view = self.back_view, None
+            self.show_view(back)
+            self._focus_right()
+            return
+        if self.view == "changes" and self.changes_from:
+            back, self.changes_from = self.changes_from, None
+            self.pending = None
+            self.show_view(back)
+            self._focus_right()
+            return
+        if self.view != "detail":
+            self.pending = None
+            self.show_view("detail")
+            self.query_one(GroupList).focus()
+            return
+        if self._right_focused():
+            self.query_one(GroupList).focus()
+        elif self.filter_text:
+            self.filter_text = ""
+            self._rebuild_list()
+            self._render_view()
+
+    def action_tab(self, mode: str) -> None:
+        if mode == self.mode:
+            return
+        self.mode = mode
+        self.filter_text = ""
+        self.back_view = None
+        self.subject = None
+        self.view = "detail"
+        self._rebuild_list()
+        self._render_view()
+        self.query_one(GroupList).focus()
+        self.refresh_bindings()
+
+    def action_next_tab(self) -> None:
+        keys = [k for k, _t in TABS]
+        self.action_tab(keys[(keys.index(self.mode) + 1) % len(keys)])
+
+    def action_filter(self) -> None:
+        before = self.filter_text
+
+        def live(text: str) -> None:
+            self.filter_text = text.strip()
+            self._rebuild_list()
+            if self.view == "detail":
+                self._render_view()
+
+        def done(value: str | None) -> None:
+            self.filter_text = before if value is None else value.strip()
+            self._rebuild_list()
+            self._render_view()
+            self.query_one(GroupList).focus()
+
+        self.app.push_screen(PromptModal(f"Filter {self.mode}", self.filter_text,
+                                         placeholder="name, upn, bundle, title ...", on_change=live, bottom=True),
+                             done)
+
+    def select_row(self, row_id: str) -> bool:
+        ids = [r.id for r in self.rows]
+        if row_id not in ids:
+            return False
+        self._last_hl = row_id
+        self.query_one(GroupList).highlighted = ids.index(row_id)
+        return True
+
+    def jump_to_finding(self) -> None:
+        table = self.query_one("#drift-table", VimTable)
+        row = table.cursor_row
+        if not 0 <= row < len(self.findings):
+            return
+        path = self.findings[row].path
+        reg = self.registry
+        is_group = reg.group(path) is not None or (self.snap is not None and self.snap.group(path) is not None)
+        mode = "groups" if is_group else "people"
+        row_id = ("g:" + (reg.group(path) or self.snap.group(path)).name  # type: ignore[union-attr]
+                  if is_group else "p:" + path.lower())
+        self.mode, self.filter_text = mode, ""
+        self.view = "detail"
+        self.subject = row_id
+        self._rebuild_list(keep=row_id)
+        self.back_view = "drift"
+        self.subject = row_id
+        self._render_view()
+        self.refresh_bindings()
+        self.query_one("#detail").focus()
+
+    # -------------------------------------------------------------------------------------------- bindings state
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "accept":
+            return self.view == "suggest" and self.suggestion is not None
+        if action == "apply":
+            return self.view == "changes" and self.pending is not None
+        return True
+
+    # -------------------------------------------------------------------------------------------- operations
+
+    def write_log(self, ev: LogLine) -> None:
+        self.query_one("#glog", VimLog).write(theme.log_text(ev))
+
+    def on_job_event(self, ev: ProgressEvent) -> None:
+        steps = self.query_one("#gsteps", StepList)
+        if steps.running:
+            steps.feed(ev)
+        act = self.query_one("#gactivity", Activity)
+        if act.active:
+            act.feed(ev)
+
+    async def run_op(self, name: str, op: Callable[[Any], Awaitable[Any]]) -> tuple[bool, Any]:
+        """Run ``op(job)`` as operation ``name`` (one at a time across the toolbox). Never raises."""
+        app = self.m365
+        job = app.begin(name, self, tool="groups")
+        if job is None:
+            return False, None
+        steps, act = self.query_one("#gsteps", StepList), self.query_one("#gactivity", Activity)
+        use_steps = name == "inventory" or job.snapshot is None
+        if use_steps:
+            steps.start(name)
+        else:
+            steps.display = False
+            act.start(name)
+        ok, result = False, None
+        try:
+            result = await op(job)
+            ok = True
+        except Exception as exc:  # noqa: BLE001 - every failure becomes a toast + log line
+            app.report_error(exc, name)
+        finally:
+            if use_steps:
+                app.call_later(steps.finish, ok)
+            act.stop()
+            app.end()
+        if job.snapshot is not None and job.snapshot is not self.snap:
+            self.snap, self.snap_origin, self.snap_stale = job.snapshot, "this session", False
+        self.refresh_all()
+        return ok, result
+
+    @work(exclusive=True, group="gop", exit_on_error=False)
+    async def action_inventory(self) -> None:
+        ok, snap = await self.run_op("inventory", lambda job: job.inventory())
+        if ok and snap is not None:
+            self.notify(f"Inventory done: {len(snap.people)} people, {len(snap.groups)} groups.")
+
+    @work(exclusive=True, group="gop", exit_on_error=False)
+    async def action_drift(self) -> None:
+        ok, findings = await self.run_op("drift", lambda job: job.drift())
+        if not ok:
+            return
+        self.findings = sorted(findings or [], key=lambda f: (SEV_ORDER.get(str(f.severity), 9), f.category,
+                                                              f.path.lower()))
+        self._render_drift()
+        self.show_view("drift")
+        self._focus_right()
+
+    def _render_drift(self) -> None:
+        from collections import Counter
+
+        c = Counter(f.category for f in self.findings)
+        color = {f.category: SEVERITY_STYLE.get(str(f.severity), SUB) for f in self.findings}
+        head = Text()
+        for i, (cat, n) in enumerate(sorted(c.items(), key=lambda kv: (-kv[1], kv[0]))):
+            head.append("   " if i else "").append("● ", style=color[cat]).append(f"{n} ", style=f"bold {FG}")
+            head.append(FINDING_LABEL.get(cat, cat), style=SUB)
+        if not self.findings:
+            head = Text("● No drift: the tenant matches the registry.", style=theme.GREEN)
+        self.query_one("#drift-counts", Static).update(head)
+        table = self.query_one("#drift-table", VimTable)
+        table.clear()
+        for i, f in enumerate(self.findings):
+            color = SEVERITY_STYLE.get(str(f.severity), SUB)
+            what = Text.assemble((FINDING_LABEL.get(f.category, f.category), f"bold {FG}"), (f"  {f.detail}", SUB))
+            what.no_wrap, what.overflow = True, "ellipsis"
+            table.add_row(theme.glyph_word(str(f.severity), color), Text(f.path, style=FG, no_wrap=True,
+                                                                          overflow="ellipsis"),
+                          what, Text(f.fix or "", style=theme.GREEN, no_wrap=True, overflow="ellipsis"),
+                          key=str(i))
+        self._render_drift_fix()
+
+    def _render_drift_fix(self) -> None:
+        table = self.query_one("#drift-table", VimTable)
+        row = table.cursor_row
+        note = self.query_one("#drift-fix", Static)
+        if not self.findings or not 0 <= row < len(self.findings):
+            note.update("")
+            return
+        f = self.findings[row]
+        note.update(Text.assemble((f.path, f"bold {FG}"), ("  ", ""), (f.detail, SUB), ("\nfix  ", DIM),
+                                  (f.fix or "no suggestion", theme.GREEN if f.fix else DIM),
+                                  ("\nenter ", f"bold {theme.BLUE}"), ("opens this person or group", SUB)))
+
+    # -- suggest -----------------------------------------------------------------------------------
+
+    @work(exclusive=True, group="gop", exit_on_error=False)
+    async def action_suggest(self) -> None:
+        ok, sug = await self.run_op("suggest", lambda job: job.suggest())
+        if not ok or sug is None:
+            return
+        self.suggestion = sug
+        self._render_suggest()
+        self.show_view("suggest")
+        self._focus_right()
+
+    def _render_suggest(self) -> None:
+        sug = self.suggestion
+        n_near = sum(1 for m in sug.near if m.candidate)
+        self.query_one("#suggest-head", Static).update(Text.assemble(
+            theme.pill(f"{len(sug.candidates)} candidates", MAUVE), ("  ", ""),
+            (f"{n_near} people close to one", SUB), ("   a ", f"bold {theme.BLUE}"),
+            ("accepts the highlighted candidate", SUB)))
+        table = self.query_one("#suggest-table", VimTable)
+        table.clear()
+        for c in sug.candidates:
+            table.add_row(Text(c.key, style=DIM), Text(c.name, style=f"bold {FG}"), Text(str(len(c.people)),
+                                                                                           style=FG),
+                          Text(", ".join(c.groups), style=SUB, no_wrap=True, overflow="ellipsis"),
+                          Text(c.existing or "new", style=theme.GREEN if c.existing else PEACH), key=c.key)
+        self._render_candidate()
+
+    def _current_candidate(self) -> Any:
+        sug = self.suggestion
+        if sug is None or not sug.candidates:
+            return None
+        row = self.query_one("#suggest-table", VimTable).cursor_row
+        return sug.candidates[row] if 0 <= row < len(sug.candidates) else None
+
+    def _render_candidate(self) -> None:
+        c = self._current_candidate()
+        note = self.query_one("#suggest-detail", Static)
+        if c is None:
+            note.update(Text("No candidates: fewer than two people share the same set of groups.", style=SUB))
+            return
+        near = [m for m in self.suggestion.near if m.candidate == c.key]
+        t = Table.grid(padding=(0, 2))
+        t.add_column(style=SUB, no_wrap=True, width=8)
+        t.add_column(style=FG)
+        t.add_row("groups", ", ".join(c.groups))
+        t.add_row("people", ", ".join(self._names(u) for u in c.people))
+        if near:
+            close = []
+            for m in near:
+                extra = " ".join([*(f"+{a}" for a in m.addons), *(f"-{x}" for x in m.missing)])
+                close.append(f"{self._names(m.upn)} ({extra})" if extra else self._names(m.upn))
+            t.add_row("close", Text("; ".join(close), style=SUB))
+        note.update(t)
+
+    @work(exclusive=True, group="gop", exit_on_error=False)
+    async def action_accept(self) -> None:
+        c = self._current_candidate()
+        if c is None:
+            return
+        name = await self.app.push_screen_wait(PromptModal(
+            "Accept as bundle", c.existing or c.name, placeholder="bundle name, e.g. Servicedesk",
+            note=f"{len(c.people)} people share these {len(c.groups)} groups. Name the bundle; people close to it "
+                 "get it too, with their extra groups as add-ons."))
+        if not name or not name.strip():
+            return
+        name = name.strip()
+        sug, key = self.suggestion, c.key
+        try:
+            changes = self.job.accept(sug, {key: name}, apply=False)
+        except Exception as exc:  # noqa: BLE001 - shown to the user
+            self.m365.report_error(exc, "accept")
+            return
+
+        async def apply(job: Any) -> list[str]:
+            return job.accept(sug, {key: name}, apply=True)
+
+        def done(result: Any) -> None:
+            self._show_changes(f"Bundle {name}: registry updated", [("registry", ch, "", "done") for ch in result],
+                               origin="suggest")
+
+        self._show_changes(f"Accept '{name}': changes to the registry",
+                           [("registry", ch, "", "planned") for ch in changes],
+                           pending=("apply", f"Write bundle '{name}' to the registry?", apply, done),
+                           origin="suggest")
+
+    # -- previews and apply -------------------------------------------------------------------------
+
+    def _show_changes(self, title: str, rows: list[tuple[str, str, str, str]], *, notes: Text | None = None,
+                      pending: Any = None, origin: str | None = None) -> None:
+        self.pending = pending
+        self.changes_from = origin
+        n = sum(1 for r in rows if r[3] == "planned")
+        head = Text.assemble((title, f"bold {FG}"), ("   ", ""))
+        if pending is not None:
+            head.append_text(theme.pill(f"preview · {n} to do", YELLOW)).append("  nothing written yet", style=SUB)
+        elif any(r[3] == "planned" for r in rows):
+            head.append("nothing to apply", style=SUB)
+        self.query_one("#changes-head", Static).update(head)
+        table = self.query_one("#changes-table", VimTable)
+        table.clear()
+        for i, (action, subject, detail, status) in enumerate(rows):
+            table.add_row(Text(action, style=SUB), Text(subject, style=FG, no_wrap=True, overflow="ellipsis"),
+                          Text(detail, style=SUB, no_wrap=True, overflow="ellipsis"), change_status(status),
+                          key=str(i))
+        out = Text()
+        if notes is not None:
+            out.append_text(notes)
+        if pending is not None:
+            if out:
+                out.append("\n\n")
+            out.append("A ", style=f"bold {theme.BLUE}").append("applies these changes (you type ", style=SUB)
+            out.append(pending[0], style=f"bold {theme.RED}").append(")   ", style=SUB)
+            out.append("esc ", style=f"bold {theme.BLUE}").append("drops the preview", style=SUB)
+        elif not rows:
+            out.append("Nothing to do.", style=theme.GREEN)
+        self.query_one("#changes-notes", Static).update(out)
+        self.show_view("changes")
+        self._focus_right()
+
+    @work(exclusive=True, group="gop", exit_on_error=False)
+    async def action_apply(self) -> None:
+        if self.pending is None:
+            return
+        word, question, apply, done = self.pending
+        body = Text.assemble((question, FG), ("\n\nThis changes ", SUB),
+                             ("the registry file" if word == "apply" and self.changes_from == "suggest"
+                              else "the tenant and the registry", f"bold {FG}"), (".", SUB))
+        ok = await self.app.push_screen_wait(TypedConfirmModal(question, body, word))
+        if not ok:
+            return
+        self.pending = None
+        ok, result = await self.run_op(f"{word}", apply)
+        if ok:
+            self.snap_stale = self.snap is not None
+            done(result)
+            self._render_state()
+            self.notify("Applied. The registry was saved." + (" Press i to refresh the snapshot."
+                                                              if self.snap_stale else ""))
+
+    @work(exclusive=True, group="gop", exit_on_error=False)
+    async def action_sync(self) -> None:
+        ok, plan = await self.run_op("sync preview", lambda job: job.sync(apply=False))
+        if ok and plan is not None:
+            self._show_changes("Sync: registry → tenant", _sync_rows(plan, False),
+                               notes=Text("Creates registry groups that do not exist in the tenant yet, and fills "
+                                          "in group ids in the registry.", style=SUB),
+                               pending=None if plan.empty else (
+                                   "apply", f"Create {len(plan.create)} group(s) in the tenant?",
+                                   lambda job: job.sync(apply=True),
+                                   lambda p: self._show_changes("Sync: done", _sync_rows(p, True)))
+                               )
+
+    @work(exclusive=True, group="gop", exit_on_error=False)
+    async def action_import_groups(self) -> None:
+        ok, entries = await self.run_op("import preview", lambda job: job.import_(apply=False))
+        if ok and entries is not None:
+            rows = [("add to registry", e.name, f"kind {e.kind}", "planned") for e in entries]
+            self._show_changes("Import: tenant → registry", rows,
+                               notes=Text("Adds prefix groups that exist in the tenant but not in the registry. "
+                                          "Fill in purpose and owner afterwards with e.", style=SUB),
+                               pending=None if not entries else (
+                                   "apply", f"Add {len(entries)} group(s) to the registry?",
+                                   lambda job: job.import_(apply=True),
+                                   lambda es: self._show_changes("Import: done", [
+                                       ("add to registry", e.name, f"kind {e.kind}", "done") for e in es])))
+
+    # -- onboard / offboard -------------------------------------------------------------------------
+
+    @work(exclusive=True, group="gop", exit_on_error=False)
+    async def action_onboard(self) -> None:
+        if self.m365.busy:
+            self.notify(f"Busy: {self.m365.busy} is running.", severity="warning")
+            return
+        reg = self.registry
+        row = self.current_row
+        guess = row.key if row is not None and row.kind == "person" and reg.person(row.key) is None else ""
+        upn = await self.app.push_screen_wait(PromptModal(
+            "Onboard · who", guess, placeholder="new.colleague@contoso.com",
+            note="The person's UPN (sign-in name). They must already exist in Entra ID."))
+        if not upn or not upn.strip():
+            return
+        upn = upn.strip().lower()
+        choices = [Choice(f"bundle  {b.name}", ("bundle", b.name), f"{len(b.groups)} groups · {b.purpose}")
+                   for b in sorted(reg.bundles.values(), key=lambda b: b.name.lower())]
+        for r in people_rows(self.snap, reg):
+            if r.key != upn and r.state not in ("offboarded", "gone"):
+                choices.append(Choice(f"like  {r.name}", ("like", r.key), f"{r.key} · {r.hint}"))
+        if reg.person(upn) is not None:
+            choices.insert(0, Choice("their registry entry", ("registry", ""), "re-add what the registry says"))
+        how = await self.app.push_screen_wait(PickerModal(
+            f"Onboard {upn} · give access like", choices, placeholder="type a bundle or a person",
+            note="A bundle adds its groups. 'like' copies a colleague's bundles and add-ons."))
+        if how is None:
+            return
+        addons: list[str] = []
+        groups = sorted({r.name for r in group_rows(self.snap, reg)}, key=str.lower)
+        while True:
+            left = [Choice("done", None, "no more add-ons" if addons else "no add-ons")]
+            left += [Choice(g, g, (reg.group(g).purpose if reg.group(g) else "")) for g in groups
+                     if g not in addons]
+            pick = await self.app.push_screen_wait(PickerModal(
+                f"Onboard {upn} · add-ons" + (f" ({', '.join(addons)})" if addons else ""), left,
+                placeholder="type a group, or enter for done",
+                note="Extra groups on top of the bundle, for this person only. Pick 'done' to continue."))
+            if pick is None or pick == "done" or not isinstance(pick, str):
+                break
+            addons.append(pick)
+        kind, value = how
+        kwargs: dict[str, Any] = {"addons": tuple(addons)}
+        if kind == "bundle":
+            kwargs["bundles"] = (value,)
+        elif kind == "like":
+            kwargs["like"] = value
+        await self.preview_onboard(upn, kwargs)
+
+    async def preview_onboard(self, upn: str, kwargs: dict[str, Any]) -> None:
+        ok, plan = await self.run_op("onboard preview", lambda job: job.onboard(upn, apply=False, **kwargs))
+        if not ok or plan is None:
+            return
+        notes = Text.assemble(("from ", SUB), (plan.source, FG), ("   bundles ", SUB),
+                              (", ".join(plan.bundles) or "none", FG), ("   add-ons ", SUB),
+                              (", ".join(plan.addons) or "none", FG))
+        if plan.manual:
+            notes.append("\n\nmanual  ", style=f"bold {PEACH}")
+            notes.append("not set by this tool, do these in the admin center:\n", style=SUB)
+            for m in plan.manual:
+                notes.append(f"  ○ {m}\n", style=FG)
+        todo = [c for c in plan.changes if c.status == "planned"]
+        pending = None
+        if todo:
+            pending = ("apply", f"Add {upn} to {len(todo)} group(s)?",
+                       lambda job: job.onboard(upn, apply=True, **kwargs),
+                       lambda p: self._show_changes(f"Onboard {upn}: done",
+                                                    _member_rows(p, "add member", self.registry)))
+        self._show_changes(f"Onboard {upn}", _member_rows(plan, "add member", self.registry), notes=notes,
+                           pending=pending)
+
+    @work(exclusive=True, group="gop", exit_on_error=False)
+    async def action_offboard(self) -> None:
+        if self.m365.busy:
+            self.notify(f"Busy: {self.m365.busy} is running.", severity="warning")
+            return
+        row = self.current_row
+        upn = row.key if row is not None and row.kind == "person" else None
+        if upn is None:
+            upn = await self.app.push_screen_wait(PromptModal(
+                "Offboard · who", placeholder="leaver@contoso.com",
+                note="Removes the person from every registry group and marks them offboarded in the registry."))
+            if not upn or not upn.strip():
+                return
+            upn = upn.strip().lower()
+        ok, plan = await self.run_op("offboard preview", lambda job: job.offboard(upn, apply=False))
+        if not ok or plan is None:
+            return
+        rows = _member_rows(plan, "remove member", self.registry)
+        rows += [("keep", g, "not in the registry: left alone", "kept") for g in plan.kept]
+        todo = [c for c in plan.changes if c.status == "planned"]
+        notes = Text("Groups that are not in the registry are left alone; remove those by hand if needed. "
+                     "Licences, apps and roles are not touched.", style=SUB)
+        self._show_changes(f"Offboard {upn}", rows, notes=notes, pending=(
+            "offboard", f"Remove {upn} from {len(todo)} group(s) and mark them offboarded?",
+            lambda job: job.offboard(upn, apply=True),
+            lambda p: self._show_changes(f"Offboard {upn}: done",
+                                         _member_rows(p, "remove member", self.registry))))
+
+    # -- registry edits ----------------------------------------------------------------------------
+
+    def _selected_group(self) -> str | None:
+        if self.subject and self.subject.startswith("g:") and self.view == "detail":
+            return self.subject[2:]
+        row = self.current_row
+        return row.key if row is not None and row.kind == "group" else None
+
+    @work(exclusive=True, group="gedit", exit_on_error=False)
+    async def action_edit(self) -> None:
+        if self.m365.busy:
+            self.notify(f"Busy: {self.m365.busy} is running.", severity="warning")
+            return
+        name = self._selected_group()
+        if name is None or self.job is None:
+            self.notify("Select a group first (2 Groups), then e edits its purpose and owner.", severity="warning")
+            return
+        reg = self.registry
+        entry = reg.group(name)
+        purpose = await self.app.push_screen_wait(PromptModal(
+            f"{name} · purpose", entry.purpose if entry else "", placeholder="what this group gives access to",
+            note="One line a colleague understands, e.g. 'Edit access to the Finance site'."))
+        if purpose is None:
+            return
+        owner = await self.app.push_screen_wait(PromptModal(
+            f"{name} · owner", entry.owner if entry else "", placeholder="owner@contoso.com",
+            note="Who approves new members (a person or a team)."))
+        if owner is None:
+            return
+        if entry is None:
+            g = self.snap.group(name) if self.snap else None
+            entry = GroupEntry(name=name, id=g.id if g else "", kind=kind_of(name, reg.prefix))
+            reg.groups[name] = entry
+        entry.purpose, entry.owner = purpose.strip(), owner.strip()
+        try:
+            path = self.job.save_registry()
+        except Exception as exc:  # noqa: BLE001 - shown to the user
+            self.m365.report_error(exc, "save registry")
+            return
+        self.refresh_all()
+        self.notify(f"Saved {name} to {path.name}.")
+
+    def action_reload(self) -> None:
+        if self.m365.busy:
+            self.notify(f"Busy: {self.m365.busy} is running.", severity="warning")
+            return
+        if self.job is None:
+            self.load()
+            return
+        try:
+            reg = self.job.reload_registry()
+        except Exception as exc:  # noqa: BLE001 - shown to the user
+            self.m365.report_error(exc, "reload registry")
+            return
+        self.refresh_all()
+        self.notify(f"Registry reloaded: {len(reg.groups)} groups, {len(reg.bundles)} bundles, "
+                    f"{len(reg.people)} people.")
+
+    def action_toggle_log(self) -> None:
+        self.log_open = not self.log_open
+        self.query_one("#glog").display = self.log_open
+
+    def action_report(self) -> None:
+        self.m365.show_report_path(self.job.run_dir if self.job is not None else None)
+
+    # -------------------------------------------------------------------------------------------- help, palette
+
+    def action_help(self) -> None:
+        from .workspace import help_group
+
+        topic = self.view if self.view != "detail" else self.mode
+        browse = [("1 2 3", "People / Groups / Bundles"), ("t", "next tab"), ("j / k", "move"),
+                  ("/", "filter the list"), ("enter", "open in the right pane"), ("tab", "switch list / right pane"),
+                  ("esc", "back"), ("L", "show / hide the log")]
+        actions = [("i", "inventory: read the tenant, writes nothing"), ("d", "drift: registry vs tenant"),
+                   ("s", "suggest bundles (a accepts one)"), ("y", "sync: create registry groups in the tenant"),
+                   ("m", "import tenant groups into the registry"), ("o", "onboard a person"),
+                   ("x", "offboard the highlighted person"), ("e", "edit purpose / owner of a group"),
+                   ("r", "reload the registry file"), ("A", "apply a preview (asks a typed word)")]
+        glob = [(":", "command palette"), ("ctrl+l", "sign in"), ("?", "this help"), ("g", "toolbox home"),
+                ("q", "quit")]
+        cols = Table.grid(expand=True, padding=(0, 4))
+        cols.add_column(ratio=1)
+        cols.add_column(ratio=1)
+        cols.add_row(Group(help_group("browse", browse), Text(""), help_group("anywhere", glob)),
+                     help_group("actions", actions))
+        body = Group(Text(HELP[topic], style=SUB), Text(""), cols)
+        self.app.push_screen(TextModal(f"Keys · groups · {topic}", body, fit=True))
+
+    def palette_commands(self) -> list[tuple[str, Any, str]]:
+        return [
+            ("Inventory", self.action_inventory, "read groups, users, licences, apps and roles; writes nothing  (i)"),
+            ("Drift", self.action_drift, "compare the registry with the tenant  (d)"),
+            ("Suggest bundles", self.action_suggest, "candidate bundles from who has what  (s)"),
+            ("Sync registry to tenant", self.action_sync, "create missing registry groups, preview first  (y)"),
+            ("Import tenant groups", self.action_import_groups, "add unregistered groups to the registry  (m)"),
+            ("Onboard a person", self.action_onboard, "add someone to the groups of a bundle  (o)"),
+            ("Offboard a person", self.action_offboard, "remove the highlighted person from registry groups  (x)"),
+            ("Edit group purpose and owner", self.action_edit, "for the selected group  (e)"),
+            ("Reload registry", self.action_reload, "re-read the registry file  (r)"),
+            ("Show people", lambda: self.action_tab("people"), "(1)"),
+            ("Show groups", lambda: self.action_tab("groups"), "(2)"),
+            ("Show bundles", lambda: self.action_tab("bundles"), "(3)"),
+            ("Filter", self.action_filter, "(/)"),
+            ("Toggle log", self.action_toggle_log, "(L)"),
+            ("Report path", self.action_report, "the last run's report.html"),
+            ("Help", self.action_help, "keys and what this view means  (?)"),
+        ]
+
+
+def _maker(row: Row) -> Callable[[bool], Text]:
+    def make(selected: bool) -> Text:
+        return row.prompt(selected)
+
+    return make
+
+
+def _member_rows(plan: Any, action: str, reg: Registry | None = None) -> list[tuple[str, str, str, str]]:
+    def purpose(name: str) -> str:
+        e = reg.group(name) if reg is not None else None
+        return e.purpose if e else ""
+
+    return [(action, c.group, c.error or purpose(c.group), c.status) for c in plan.changes]
+
+
+def _sync_rows(plan: Any, applied: bool) -> list[tuple[str, str, str, str]]:
+    created, failed = dict(plan.created), dict(plan.failed)
+    rows = []
+    for e in plan.create:
+        status = "planned" if not applied else ("done" if e.name in created else "failed")
+        rows.append(("create group", e.name, failed.get(e.name) or e.purpose, status))
+    rows += [("fill id", n, gid, "done" if applied else "planned") for n, gid in plan.fill_ids]
+    return rows
+
+

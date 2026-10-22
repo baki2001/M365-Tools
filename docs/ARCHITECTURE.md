@@ -55,8 +55,11 @@ src/m365tools/
     usermap.py     build_usermap(src_inv, dst_gw), save_usermap/load_usermap, UserMap (resolve(email))
     job.py         Job, RestGatewayFactory, BlockingFindingsError  — the only thing UI calls
   tools/groups/    see "groups tool" below
-  tui/             Textual app: one Workspace screen (sidebar + 7 sections: job, checks, plan, run, verify, lock,
-                   runs), keyboard-only modals, command palette; calls only Job + services
+  tui/             Textual app "m365 toolbox": screens are modes (home.py HomeScreen, workspace.py spmig Workspace
+                   with sidebar + 7 sections, groups.py GroupsScreen explorer + groups_view.py renderers),
+                   shared HeaderBar/KeyBar, keyboard-only modals, command palette (screen entries via
+                   palette_commands()); one operation at a time across tools (app.begin(name, listener, tool=));
+                   calls only Job / GroupsJob + services
   cli.py           typer app `m365`:
                      m365 tenant  add | list | login | setup-help
                      m365 profile list | show

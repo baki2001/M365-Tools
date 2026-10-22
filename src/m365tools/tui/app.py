@@ -1,4 +1,7 @@
-"""The Textual application: configuration, the current Job, and the bridge from core events to the UI.
+"""The Textual application: configuration, the current jobs, and the bridge from core events to the UI.
+
+Screens are Textual *modes* that stay alive while you switch: ``home`` (the toolbox), ``spmig`` (the
+:class:`Workspace`) and ``groups`` (the :class:`GroupsScreen`). ``g`` goes home when nothing runs.
 
 How an operation flows (e.g. audit):
   1. a section calls ``Section.run_job("audit", lambda job: job.audit())`` inside an ``@work`` worker;
@@ -22,11 +25,13 @@ from textual.message import Message
 
 from m365tools.core.config import AppConfig, load_config, profile_to_job_options
 from m365tools.core.events import AuthPrompt, LogLine, ProgressEvent, Throttled
-from m365tools.services import TenantClients, make_gateway_factory, make_run_dir_factory
+from m365tools.services import TenantClients, make_gateway_factory, make_groups_job, make_run_dir_factory
 from m365tools.tools.spmig.job import Job
 from m365tools.tools.spmig.models import Endpoint, JobOptions, RunSummary
 
 from .commands import M365Commands
+from .groups import GroupsScreen
+from .home import HomeScreen
 from .modals import AuthModal, Choice, ConfirmModal, PickerModal
 from .theme import THEME, THEME_VARIABLES
 from .workspace import Workspace
@@ -46,10 +51,12 @@ def blank_options() -> JobOptions:
 
 
 class M365App(App[None]):
-    TITLE = "m365tools"
+    TITLE = "m365 toolbox"
     CSS_PATH = "app.tcss"
     COMMANDS: ClassVar[set[Any]] = {M365Commands}
     BINDINGS: ClassVar[list[BindingType]] = [Binding("ctrl+q", "quit_app", "quit", show=False, priority=True)]
+    MODES: ClassVar[dict[str, Any]] = {"home": HomeScreen, "spmig": Workspace, "groups": GroupsScreen}
+    TOOLS: ClassVar[tuple[str, ...]] = ("spmig", "groups")
 
     def __init__(
         self,
@@ -58,6 +65,8 @@ class M365App(App[None]):
         job_cls: Callable[..., Any] = Job,
         gateway_factory: Callable[[AppConfig, Any], Any] = make_gateway_factory,
         clients: TenantClients | None = None,
+        groups_job_factory: Callable[[AppConfig, str | None, Any], Any] | None = None,
+        start: str = "home",
     ) -> None:
         super().__init__()
         self.cfg = cfg if cfg is not None else load_config()
@@ -70,6 +79,10 @@ class M365App(App[None]):
         self.busy: str | None = None  # name of the running operation
         self.last_audit: RunSummary | None = None  # last audit for the current options (migrate checks it)
         self.current_job: Any = None
+        self.groups_job_factory = groups_job_factory or (lambda cfg, tenant, sink: make_groups_job(cfg, tenant, sink))
+        self.groups_current: Any = None
+        self.start = start
+        self.busy_tool: str | None = None
         self._listener: Any = None
         self._auth_modal: AuthModal | None = None
 
@@ -80,11 +93,45 @@ class M365App(App[None]):
     def on_mount(self) -> None:
         self.register_theme(THEME)
         self.theme = THEME.name
-        self.push_screen(Workspace())
+        self.switch_mode(self.start)
 
     @property
     def workspace(self) -> Workspace:
-        return next(s for s in self.screen_stack if isinstance(s, Workspace))
+        """The spmig screen (raises LookupError when it was never opened)."""
+        try:
+            return next(s for s in self.get_screen_stack("spmig") if isinstance(s, Workspace))
+        except (KeyError, StopIteration):
+            raise LookupError("spmig is not open") from None
+
+    @property
+    def groups_screen(self) -> GroupsScreen | None:
+        try:
+            return next((s for s in self.get_screen_stack("groups") if isinstance(s, GroupsScreen)), None)
+        except KeyError:
+            return None
+
+    # -------------------------------------------------------------------------------------------- tools
+
+    def open_tool(self, tool: str) -> None:
+        if self.current_mode == tool:
+            return
+        if self.busy:
+            self.notify(f"{self.busy} is running: wait until it finishes.", severity="warning")
+            return
+        self.switch_mode(tool)
+
+    def action_go_home(self) -> None:
+        if self.current_mode == "home":
+            return
+        if self.busy:
+            self.notify(f"{self.busy} is running: home is available when it finishes.", severity="warning")
+            return
+        self.switch_mode("home")
+
+    def refresh_header(self) -> None:
+        with contextlib.suppress(Exception):
+            for header in self.screen.query("#header"):
+                header.refresh()
 
     def notify(self, message: str, *, markup: bool = False, **kw: Any) -> None:  # type: ignore[override]
         """Notifications carry user data (paths, server errors): no markup by default."""
@@ -111,7 +158,7 @@ class M365App(App[None]):
             for key in ("checks", "plan", "verify", "lock"):
                 ws.section(key).reset()
         ws.section("job").refresh_cards()
-        ws.query_one("#header").refresh()
+        self.refresh_header()
 
     def load_profile(self, name: str) -> None:
         try:
@@ -122,10 +169,40 @@ class M365App(App[None]):
         self.set_options(opts)
         self.notify(f"Profile '{name}' loaded.")
 
+    @work(group="tenant", exclusive=True, exit_on_error=False)
+    async def action_pick_tenant(self) -> None:
+        tenants = sorted(self.cfg.tenants)
+        if not tenants:
+            self.notify("No tenants configured: run 'm365 tenant add' first.", severity="error")
+            return
+        name = await self.push_screen_wait(PickerModal(
+            "Switch tenant", [Choice(t, t, self.cfg.tenants[t].sharepoint_host) for t in tenants],
+            highlight=self.tenant))
+        if name is not None and name != self.tenant:
+            self.switch_tenant(name)
+
     def switch_tenant(self, name: str) -> None:
+        if self.busy:
+            self.notify(f"{self.busy} is running: switch the tenant after it finishes.", severity="warning")
+            return
         self.tenant, self.account = name, ""
-        self.workspace.query_one("#header").refresh()
+        self._close_groups_job()
+        self.refresh_header()
+        gs = self.groups_screen
+        if gs is not None:
+            gs.tenant_changed()
         self.notify(f"Tenant: {name}")
+
+    def groups_job(self) -> Any:
+        """The GroupsJob of the current tenant (created on first use; raises when no tenant is configured)."""
+        if self.groups_current is None:
+            self.groups_current = self.groups_job_factory(self.cfg, self.tenant, self.sink)
+        return self.groups_current
+
+    def _close_groups_job(self) -> None:
+        old, self.groups_current = self.groups_current, None
+        if old is not None:
+            self.run_worker(_aclose(old), group="close", exit_on_error=False)
 
     def job(self) -> Any:
         if self.current_job is None:
@@ -140,36 +217,63 @@ class M365App(App[None]):
 
     # -------------------------------------------------------------------------------------------- operations
 
-    def begin(self, name: str, listener: Any) -> Any:
-        """Start operation ``name``; returns the Job, or None (with a toast) when it cannot start now."""
+    def begin(self, name: str, listener: Any, *, tool: str = "spmig") -> Any:
+        """Start operation ``name`` of ``tool``; returns its job, or None (with a toast) when it cannot start now.
+        One operation at a time across all tools."""
         if self.busy:
             self.notify(f"Busy: {self.busy} is running.", severity="warning")
             return None
-        if not self.endpoints_ready():
-            self.notify("Set source and destination first (1 Job, then e), or load a profile (p).",
-                        severity="warning")
-            return None
-        self.busy, self._listener = name, listener
-        self.workspace.query_one("#header").refresh()
-        self.workspace.write_log(LogLine("info", f"── {name} ──"))
-        return self.job()
+        if tool == "groups":
+            try:
+                job = self.groups_job()
+            except Exception as exc:  # noqa: BLE001 - shown to the user
+                self.report_error(exc, name)
+                return None
+        else:
+            if not self.endpoints_ready():
+                self.notify("Set source and destination first (1 Job, then e), or load a profile (p).",
+                            severity="warning")
+                return None
+            job = self.job()
+        self.busy, self.busy_tool, self._listener = name, tool, listener
+        self.refresh_header()
+        self.write_log(LogLine("info", f"── {name} ──"), listener)
+        return job
 
     def end(self) -> None:
-        self.busy, self._listener = None, None
+        tool = self.busy_tool
+        self.busy, self.busy_tool, self._listener = None, None, None
         self.close_auth_prompt()
+        self.refresh_header()
+        if tool != "spmig":
+            return
         with contextlib.suppress(Exception):
             ws = self.workspace
-            ws.query_one("#header").refresh()
             ws.section("job").refresh_cards()
             ws.section("runs").action_reload()  # the operation left a run folder
             ws.refresh_bindings()
+
+    def write_log(self, ev: LogLine, listener: Any = None) -> None:
+        """Log lines go to the screen of the operation that emitted them, else to the current screen."""
+        candidates = []
+        with contextlib.suppress(Exception):
+            if listener is not None:
+                candidates.append(listener.screen)
+        candidates.append(self.screen)
+        for screen in candidates:
+            fn = getattr(screen, "write_log", None)
+            if fn is not None:
+                fn(ev)
+                return
+        with contextlib.suppress(Exception):
+            self.workspace.write_log(ev)
 
     def report_error(self, exc: BaseException, where: str) -> None:
         """A failure anywhere: red toast + log line, never a crash."""
         msg = f"{where}: {type(exc).__name__}: {exc}"
         self.notify(msg, title="Error", severity="error", timeout=10)
         with contextlib.suppress(Exception):
-            self.workspace.write_log(LogLine("error", msg))
+            self.write_log(LogLine("error", msg), self._listener)
 
     def show_report_path(self, run_dir: Path | None) -> None:
         if run_dir is None:
@@ -197,7 +301,7 @@ class M365App(App[None]):
         if not isinstance(ev, LogLine | Throttled):
             self.close_auth_prompt()  # progress means sign-in completed
         if isinstance(ev, LogLine):
-            self.workspace.write_log(ev)
+            self.write_log(ev, message.listener)
         if message.listener is not None:
             message.listener.on_job_event(ev)
 
@@ -229,8 +333,14 @@ class M365App(App[None]):
             return
         finally:
             self.close_auth_prompt()
+        if tenant != self.tenant:
+            self._close_groups_job()
+            gs = self.groups_screen
+            self.tenant = tenant
+            if gs is not None:
+                gs.tenant_changed()
         self.tenant, self.account = tenant, ", ".join(accounts)
-        self.workspace.query_one("#header").refresh()
+        self.refresh_header()
         self.notify(f"Signed in to {tenant} as {self.account or '?'}")
 
     def action_open_runs_dir(self) -> None:
@@ -250,11 +360,18 @@ class M365App(App[None]):
                 return
             if self.current_job is not None:
                 self.current_job.request_stop()
+        elif self.busy:
+            ok = await self.push_screen_wait(ConfirmModal(
+                f"Quit while {self.busy} runs?", "The operation is cancelled. Writes already made stay made."))
+            if not ok:
+                return
         self.exit()
 
     async def on_unmount(self) -> None:
         if self.current_job is not None:
             await _aclose(self.current_job)
+        if self.groups_current is not None:
+            await _aclose(self.groups_current)
         with contextlib.suppress(Exception):
             await self.clients.aclose()
 

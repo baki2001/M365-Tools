@@ -299,6 +299,197 @@ PercentageStatus {
     display: none;
 }
 
+/* ---------------------------------------------------------------- home */
+
+#home {
+    height: 1fr;
+    align: center top;
+    padding: 3 4 0 4;
+}
+
+#home > * {
+    width: 96;
+    max-width: 100%;
+}
+
+#home-mark {
+    height: auto;
+}
+
+#home-tagline {
+    height: auto;
+    margin: 1 0 2 0;
+}
+
+.home-label {
+    height: 1;
+    padding: 0 1;
+}
+
+#tools {
+    height: auto;
+    border: round $surface1;
+    padding: 0;
+    background: $base;
+    scrollbar-size-vertical: 0;
+}
+
+#tools:focus {
+    border: round $mauve;
+    background-tint: $foreground 0%;
+}
+
+#home-foot {
+    height: auto;
+    margin: 1 0 0 0;
+    padding: 0 1;
+}
+
+/* ---------------------------------------------------------------- shared nav lists (home tools, groups list) */
+
+#tools > .option-list--option, #glist > .option-list--option {
+    padding: 0 1;
+}
+
+#tools > .option-list--separator {
+    color: $base;
+}
+
+#tools > .option-list--option-highlighted, #glist > .option-list--option-highlighted {
+    background: $surface1;
+    color: $foreground;
+    text-style: none;
+}
+
+#tools:focus > .option-list--option-highlighted, #glist:focus > .option-list--option-highlighted {
+    background: $mauve;
+    color: $crust;
+    text-style: none;
+}
+
+#tools > .option-list--option-hover, #glist > .option-list--option-hover {
+    background: $surface0;
+}
+
+/* ---------------------------------------------------------------- groups explorer */
+
+#gnav {
+    width: 38;
+    height: 1fr;
+    background: $mantle;
+    padding: 1 0 0 0;
+}
+
+#gtabs {
+    height: 1;
+    padding: 0 1;
+    margin: 0 0 1 0;
+}
+
+#gfilter {
+    height: 1;
+    padding: 0 1;
+    margin: 0 0 1 0;
+}
+
+#glist {
+    height: 1fr;
+    border: none;
+    padding: 0;
+    background: $mantle;
+    scrollbar-size-vertical: 1;
+}
+
+#glist:focus {
+    border: none;
+    background-tint: $foreground 0%;
+}
+
+#glist-empty {
+    height: auto;
+    padding: 1 2;
+}
+
+#gmain {
+    width: 1fr;
+    height: 1fr;
+    padding: 1 2;
+    background: $base;
+    border-left: outer $base;
+}
+
+#gmain:focus-within {
+    border-left: outer $mauve;
+}
+
+#gstate {
+    height: auto;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+    margin: 0 0 1 0;
+}
+
+#gswitch {
+    height: 1fr;
+}
+
+#gswitch > Vertical {
+    height: 1fr;
+}
+
+#gswitch VimTable {
+    height: auto;
+    max-height: 1fr;
+}
+
+#detail {
+    height: 1fr;
+    border: round $surface1;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+}
+
+#detail:focus {
+    border: round $mauve;
+}
+
+.gnote {
+    height: auto;
+    max-height: 12;
+    margin: 1 0 0 0;
+    padding: 0 1;
+    border-left: outer $surface1;
+}
+
+#ops {
+    height: auto;
+}
+
+#gsteps {
+    margin: 1 0 0 0;
+}
+
+#gactivity {
+    margin: 1 0 0 0;
+}
+
+#glog {
+    height: 10;
+    min-height: 5;
+    margin: 1 0 0 0;
+    border: round $surface1;
+    border-title-color: $subtext0;
+    border-title-style: bold;
+    padding: 0 1;
+    background: $base;
+    scrollbar-size-vertical: 1;
+}
+
+#glog:focus {
+    border: round $mauve;
+    border-title-color: $mauve;
+}
+
 /* ---------------------------------------------------------------- modals */
 
 ModalScreen {

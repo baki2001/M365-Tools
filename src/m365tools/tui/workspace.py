@@ -7,10 +7,12 @@ Navigation keys live here; each section adds its own keys while focus is inside 
     esc            close / back            a d m v          audit, dry run, migrate, verify (from anywhere)
     :              command palette         ?                help for the current section
     ctrl+l         sign in                 q                quit
+    g              back to the toolbox home
 """
 
 from __future__ import annotations
 
+from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.console import Group
@@ -72,6 +74,7 @@ class Workspace(Screen[None]):
         Binding("colon", "app.command_palette", "commands", key_display=":"),
         Binding("question_mark", "help", "help", key_display="?"),
         Binding("ctrl+l", "app.login", "sign in", show=False),
+        Binding("g", "app.go_home", "home", priority=True),
         Binding("q", "app.quit_app", "quit"),
     ]
 
@@ -80,7 +83,7 @@ class Workspace(Screen[None]):
         return self.app  # type: ignore[return-value]
 
     def compose(self) -> ComposeResult:
-        yield HeaderBar(id="header")
+        yield HeaderBar("spmig", id="header")
         with Horizontal(id="body"):
             with Vertical(id="nav"):
                 yield Sidebar([(s.KEY, s.TITLE, s.IDLE) for s in SECTIONS], id="sidebar")
@@ -204,19 +207,39 @@ class Workspace(Screen[None]):
     def action_resume(self) -> None:
         self._go("run").action_resume()
 
+    # -- palette ------------------------------------------------------------------------------------
+
+    def palette_commands(self) -> list[tuple[str, Any, str]]:
+        app = self.m365
+        cmds: list[tuple[str, Any, str]] = [
+            ("Audit", self.action_audit, "inventory both sides and run every check; writes nothing  (a)"),
+            ("Dry run", self.action_dryrun, "compute the full plan; writes nothing  (d)"),
+            ("Migrate", self.action_migrate, "copy files to the destination, asks first  (m)"),
+            ("Resume a migration run", self.action_resume, "continue an earlier run from its journal  (4, r)"),
+            ("Verify", self.action_verify, "compare source and destination  (v)"),
+            ("Lock: preview", self.action_lock_preview, "who would be set to Read on the source  (6, l)"),
+            ("Lock: apply", self.action_lock_apply, "downgrade writers on the source to Read  (6, A)"),
+            ("Help", self.action_help, "keys for the current section  (?)"),
+        ]
+        for name in sorted(app.cfg.profiles):
+            cmds.append((f"Load profile {name}", partial(app.load_profile, name), "replace the job with it"))
+        for i, cls in enumerate(SECTIONS, 1):
+            cmds.append((f"Go to {cls.TITLE}", partial(self.action_show, i), f"({i})"))
+        return cmds
+
     # -- help ---------------------------------------------------------------------------------------
 
     def action_help(self) -> None:
         sec = self.current
         own = [(b.key_display or self._keys(b.key), b.description) for b in type(sec).BINDINGS
                if isinstance(b, Binding)]
-        lists = [("j / k", "move down / up"), ("g / G", "top / bottom"), ("ctrl+d / u", "page"),
+        lists = [("j / k", "move down / up"), ("home / G", "top / bottom"), ("ctrl+d / u", "page"),
                  ("/", "filter (where shown)"), ("enter", "open / details")]
         move = [("1 - 7", "show section"), ("tab", "switch sidebar / main"), ("h  [", "focus sidebar"),
                 ("l  ]", "focus main (in Lock, l previews)"), ("esc", "close panel / back to sidebar")]
         anywhere = [("a", "audit: inventory + checks, writes nothing"), ("d", "dry run: full plan"),
                     ("m", "migrate (asks first)"), ("v", "verify"), (":", "command palette"),
-                    ("ctrl+l", "sign in to a tenant"), ("?", "this help"), ("q", "quit")]
+                    ("ctrl+l", "sign in to a tenant"), ("?", "this help"), ("g", "toolbox home"), ("q", "quit")]
         left = Group(help_group(f"this section · {sec.NUMBER} {sec.TITLE}", own),
                      Text(""), help_group("lists and tables", lists))
         right = Group(help_group("global · move around", move), Text(""), help_group("global · anywhere", anywhere))

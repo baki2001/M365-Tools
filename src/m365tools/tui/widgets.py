@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Iterable
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.table import Table
@@ -175,8 +174,17 @@ class VimLog(RichLog):
 # ------------------------------------------------------------------------------------------------ chrome
 
 
+MARK = "◆"
+BRAND = "m365 toolbox"
+
+
 class HeaderBar(Widget):
-    """Top line on mantle: ``m365tools ▸ spmig`` | tenant · account · profile breadcrumb | clock."""
+    """Top line on mantle, the same on every screen: ``◆ m365 toolbox ▸ tool`` | busy pill and tool context |
+    tenant · signed-in account."""
+
+    def __init__(self, tool: str = "", *, id: str | None = None) -> None:
+        super().__init__(id=id)
+        self.tool = tool
 
     @property
     def m365(self) -> M365App:
@@ -190,19 +198,51 @@ class HeaderBar(Widget):
         grid = Table.grid(expand=True)
         grid.add_column(justify="left", no_wrap=True)
         grid.add_column(justify="center", ratio=1, no_wrap=True, overflow="ellipsis")
-        grid.add_column(justify="right", no_wrap=True)
-        left = Text(" m365tools ▸ spmig", style=f"bold {MAUVE}")
+        grid.add_column(justify="right", no_wrap=True, overflow="ellipsis")
+        left = Text.assemble((f" {MARK} ", f"bold {MAUVE}"), (BRAND, f"bold {FG}"))
+        if self.tool:
+            left.append("  ▸ ", style=DIM).append(self.tool, style=f"bold {MAUVE}")
         mid = Text()
         if app.busy:
             mid.append_text(theme.pill(f"◐ {app.busy}", YELLOW)).append("   ")
-        mid.append("tenant ", style=SUB).append(app.tenant or "none", style=FG if app.tenant else theme.PEACH)
-        mid.append(" · ", style=DIM).append("account ", style=SUB)
-        mid.append(app.account or "not signed in", style=FG if app.account else DIM)
-        mid.append(" · ", style=DIM).append("profile ", style=SUB)
-        mid.append(app.opts.profile or "unsaved", style=FG if app.opts.profile else DIM)
-        right = Text(datetime.now().strftime("%H:%M:%S "), style=SUB)
+        if self.tool == "spmig":
+            mid.append("profile ", style=SUB).append(app.opts.profile or "unsaved",
+                                                      style=FG if app.opts.profile else DIM)
+        right = Text()
+        right.append("tenant ", style=SUB).append(app.tenant or "none", style=FG if app.tenant else theme.PEACH)
+        right.append(" · ", style=DIM)
+        right.append(app.account or "not signed in", style=FG if app.account else DIM).append(" ")
         grid.add_row(left, mid, right)
         return grid
+
+
+ESSENTIAL_KEYS = frozenset({":", "?", "q"})
+
+
+def fit_keys(local: list[tuple[str, str]], glob: list[tuple[str, str]], width: int
+             ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Drop chips until the bar fits ``width``: movement chips first, then the last non-essential global ones,
+    then the last local ones. ``:``, ``?`` and ``q`` always stay."""
+    local, glob = list(local), list(glob)
+
+    def size() -> int:
+        n = 1 + theme.key_hints(local).cell_len + theme.key_hints(glob).cell_len
+        return n + (5 if local and glob else 0)
+
+    while size() > width:
+        move = next((i for i, (k, _d) in enumerate(local) if k in ("j/k",)), None)
+        if move is not None:
+            local.pop(move)
+            continue
+        drop = next((i for i in range(len(glob) - 1, -1, -1) if glob[i][0] not in ESSENTIAL_KEYS), None)
+        if drop is not None:
+            glob.pop(drop)
+            continue
+        if local:
+            local.pop()
+            continue
+        break
+    return local, glob
 
 
 class KeyBar(Widget):
@@ -230,6 +270,7 @@ class KeyBar(Widget):
             seen.add(b.action)
             target = glob if active.node in (screen, app) else local
             target.append((b.key_display or app.get_key_display(b), b.description))
+        local, glob = fit_keys(local, glob, self.size.width or 10_000)
         out = Text(" ")
         out.append_text(theme.key_hints(local))
         if local and glob:

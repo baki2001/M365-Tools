@@ -1,13 +1,15 @@
-# m365tools
+# m365 toolbox
 
-Terminal tools for Microsoft 365 admins, built for Linux and WSL.
+Terminal tools for Microsoft 365 admins, built for Linux and WSL. One command, `m365`, opens the toolbox:
+pick a tool with `1` or `2`, and `g` brings you back.
 
-The first tool is **spmig**: it copies a SharePoint document library from one site to another,
-inside your tenant or to a different tenant. It keeps the folder structure, the file dates and
-who created or changed each file. It checks everything first, shows you what it would do, and
-writes a report you can hand to someone else.
+| Tool | What it does |
+|---|---|
+| **spmig** | Copies a SharePoint document library to another site, in your tenant or another one. Keeps folders, file dates and who created or changed each file. Checks first, shows what it would do, writes a report. |
+| **groups** | Keeps track of your `SG-*` access groups: what each is for, who is in it and why, what drifted, and what a new colleague should get. Onboards and offboards people with a preview first. |
 
-Everything runs in your terminal: a guided screen (`m365`) or plain commands (`m365 spmig ...`).
+Everything runs in your terminal: a guided screen (`m365`) or plain commands (`m365 spmig ...`,
+`m365 groups ...`).
 
 ---
 
@@ -41,12 +43,12 @@ m365 tenant login contoso      # browser opens, sign in, done
 
 Your login is cached, so you won't be asked again for a while.
 
-## 3. Migrate a library
+## 3. Migrate a library (spmig)
 
 ### The easy way: guided screen
 
 ```bash
-m365
+m365            # then 1 for spmig (or: m365 spmig tui)
 ```
 
 One keyboard-driven screen: sections on the left (**1 Job, 2 Checks, 3 Plan, 4 Run, 5 Verify, 6 Lock,
@@ -94,7 +96,7 @@ site's own Documents library.
 Every step leaves a folder with `report.html` (open it in a browser), `report.txt` and CSV files.
 The path is printed at the end.
 
-## 4. Good to know
+## 4. Good to know about migrating
 
 **It can be stopped and continued.** Press Ctrl+C and the running file finishes, then it stops.
 Start it again later with `m365 spmig migrate --profile X --resume <run folder>` and it carries on
@@ -114,7 +116,53 @@ sharing links. The audit tells you how many items are affected so you can decide
 **Slow?** SharePoint throttles uploads at roughly 0.5 to 1 MB/s per connection. The tool waits and retries
 by itself and shows "throttled, waiting" while it does. More workers rarely help.
 
-## 5. When something goes wrong
+## 5. Access groups (groups)
+
+Groups follow one pattern: `SG-<Kind>-<Name>`, one capability each (`SG-Doc-Finance` for a site,
+`SG-App-Jira` for an app, `SG-Lic-E3` for a licence). A **bundle** is a role package, like "Servicedesk": a
+list of those groups. Bundles live only in a registry file (`~/.config/m365tools/groups/<tenant>.toml`),
+never as groups in Entra; onboarding adds a person directly to each group of their bundle.
+Run `m365 tenant setup-help` once for the extra Graph permissions.
+
+### The easy way: guided screen
+
+```bash
+m365            # then 2 for groups (or: m365 groups tui)
+```
+
+An explorer: on the left a list with three tabs, **People**, **Groups** and **Bundles** (`1` `2` `3` or `t`),
+`/` to filter, `j`/`k` to move. The right side shows what is highlighted: for a person their bundles,
+add-ons and every group with ● ok, ○ missing or ▲ unexplained, plus licences, apps and roles; for a group
+its purpose, owner, members and why each one is there. Actions: `i` inventory, `d` drift (`enter` on a
+finding jumps to that person or group), `s` suggest bundles (`a` accepts one), `o` onboard, `x` offboard,
+`y` sync, `m` import, `e` edit a group's purpose and owner, `r` reload the registry. Everything that writes
+shows a preview first; `A` applies it after you type `apply` (or `offboard`).
+
+### The scripted way: commands
+
+```bash
+m365 groups inventory                 # read the tenant, save a snapshot
+m365 groups suggest                   # propose bundles; --accept 1=Servicedesk --apply writes one
+m365 groups drift                     # registry vs tenant
+m365 groups explain anna@contoso.com  # why does Anna have what she has (or: a group name)
+m365 onboard new.colleague@contoso.com --like anna@contoso.com            # preview
+m365 onboard new.colleague@contoso.com --bundle Servicedesk --addon SG-Doc-Finance --apply
+m365 offboard leaver@contoso.com --apply
+```
+
+| Step | Touches the tenant? | What you get |
+|---|---|---|
+| **inventory** | read only | Snapshot of groups, members, licences, apps and roles; a matrix CSV and a report. |
+| **suggest** | read only | Candidate bundles from people who share the same groups. Accepting writes only the registry. |
+| **drift** | read only | Who is missing a group they should have, who has one nobody can explain, unregistered groups. |
+| **sync** / **import** | sync creates groups; import writes the registry | Registry and tenant brought in line, preview first, `--apply` to do it. |
+| **onboard** / **offboard** | adds / removes memberships | The group changes, plus what you must do by hand (licences, apps, roles). Preview first. |
+
+**Good to know:** the tool never deletes a group, and never removes anyone except with `offboard`. Licences,
+app assignments and roles are shown but not changed. Each run leaves a folder with `report.html` and CSVs
+under `runs/groups-<tenant>/`.
+
+## 6. When something goes wrong
 
 | You see | What it means | What to do |
 |---|---|---|
