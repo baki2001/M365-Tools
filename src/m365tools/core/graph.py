@@ -89,7 +89,9 @@ class GraphClient(SpClient):
         return await self._all("users", _USER_DETAIL_SELECT)
 
     async def list_subscribed_skus(self) -> list[dict[str, Any]]:
-        return await self._all("subscribedSkus", "skuId,skuPartNumber")
+        """``/subscribedSkus`` rejects ``$top`` ("does not support custom page sizes"), so no paging hint."""
+        return [x async for x in self.iter_odata(f"{GRAPH_BASE}/subscribedSkus",
+                                                 params={"$select": "skuId,skuPartNumber"})]
 
     async def list_service_principals(self) -> list[dict[str, Any]]:
         """Service principals with their ``appRoleAssignmentRequired`` flag (filtered by the caller)."""
