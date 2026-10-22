@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 from m365tools.core.errors import AccessDeniedError
 from m365tools.core.events import EventSink, LogLine, PhaseChanged, Stats, null_sink
@@ -13,8 +13,6 @@ from m365tools.core.report.csv_ import write_csv
 from .gateway import GraphGateway
 from .models import AppInfo, GroupInfo, Person, RoleInfo, Snapshot, norm
 
-T = TypeVar("T")
-
 INVENTORY_PHASES: tuple[str, ...] = ("groups", "users", "licences", "apps", "roles", "report")
 
 
@@ -22,7 +20,7 @@ def _stats(sink: EventSink, done: int, total: int) -> None:
     sink(Stats(done=done, total=total, bytes_done=0, bytes_total=0, mbps=0.0, eta_s=None, failed=0, warnings=0))
 
 
-async def _optional(sink: EventSink, what: str, coro: Any, fallback: T) -> T:
+async def _optional[T](sink: EventSink, what: str, coro: Any, fallback: T) -> T:
     """Licences, apps and roles are nice to have: when the signed-in account lacks the permission, warn and
     carry on with the groups and users instead of failing the whole inventory."""
     try:
