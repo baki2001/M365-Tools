@@ -19,7 +19,9 @@ from ..theme import FG, MAUVE, SUB, VERIFY_LABEL, VERIFY_STYLE
 from ..widgets import Activity, VimTable
 from .base import Empty, Section
 
-MAX_ROWS = 20_000
+# Rows put in the table. Each one takes about a quarter of a millisecond to build, so this keeps a redraw well
+# under a second; f and / narrow the list, and the full set is in the run folder.
+MAX_ROWS = 2_000
 PROBLEMS = ("missing", "size_differs", "source_newer")
 STATUSES = ("ok", "missing", "size_differs", "source_newer", "only_in_destination")
 FILTERS: tuple[str | None, ...] = (None, "problems", *STATUSES)
@@ -89,12 +91,14 @@ class VerifySection(Section):
         line.append(" f ", style=SUB).append(flt, style=f"bold {MAUVE}")
         if self.filter_text:
             line.append("  / ", style=SUB).append(self.filter_text, style=f"bold {MAUVE}")
-        self.query_one("#verify-counts", Static).update(line)
         words = self.filter_text.lower().split()
         flt = self.status_filter
         rows = [r for r in res.rows
                 if (flt is None or (r.status in PROBLEMS if flt == "problems" else r.status == flt))
                 and all(w in f"{r.rel_path} {r.detail}".lower() for w in words)]
+        if len(rows) > MAX_ROWS:
+            line.append(f"  first {MAX_ROWS:,} of {len(rows):,} rows shown (see verify.csv)", style=theme.YELLOW)
+        self.query_one("#verify-counts", Static).update(line)
         table = self.query_one(VimTable)
         table.clear()
         for r in rows[:MAX_ROWS]:

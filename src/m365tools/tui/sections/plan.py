@@ -20,7 +20,9 @@ from ..theme import ACTION_LABEL, ACTION_STYLE, FG, MAUVE, RED, SUB
 from ..widgets import StepList, VimTable
 from .base import Empty, Section
 
-MAX_ROWS = 20_000
+# Rows put in the table. Each one takes about a quarter of a millisecond to build, so this keeps a redraw well
+# under a second; f and / narrow the list, and the full set is in the run folder.
+MAX_ROWS = 2_000
 # The dry-run engine walk (folders/files) and the report are part of computing the plan.
 DRYRUN_ALIASES = {"folders": "plan", "files": "plan", "finalize": "plan", "report": "plan"}
 FILTERS: tuple[str | None, ...] = (None, *(a.value for a in Action))

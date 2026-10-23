@@ -186,7 +186,7 @@ class JobSection(Section):
 
     def refresh_runs(self) -> None:
         try:
-            runs = list_all_runs()[:5]
+            runs = list_all_runs(limit=5)
         except OSError:
             runs = []
         self.query_one("#recent-runs", Static).update(recent_runs(runs))
