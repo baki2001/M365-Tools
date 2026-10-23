@@ -104,6 +104,10 @@ it uses the site's own Documents library.
 Every step leaves a folder with `report.html` (open it in a browser), `report.txt` and some CSV files.
 It prints the path at the end.
 
+In the TUI, `7` Runs lists every run folder. Pick an audit or dry run and press Enter to load it back. You get
+the source, destination and options it ran with, its findings in 2 Checks and its plan in 3 Plan, so you can
+carry on with `m`. The newest audit or dry run with the same job is loaded as well. `t` shows its report.txt.
+
 ## 4. Good to know about migrating
 
 You can stop a migration and pick it up later. Press Ctrl+C and it finishes the file it's on, then stops.
