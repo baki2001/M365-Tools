@@ -205,6 +205,24 @@ async def test_audit_shows_findings_and_blocking_count_then_migrate_demands_forc
         assert not dst.write_calls()
 
 
+async def test_dryrun_marks_items_the_audit_blocked():
+    src, dst = setup()
+    src.add_file("Klanten/~$lock.docx")  # BLOCKING illegal_name
+    app = make_app(src, dst)
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.load_profile("svc")
+        await pilot.press("a")
+        await settle(app, pilot)
+        assert app.last_audit is not None and len(app.last_audit.blocking) == 1
+        await pilot.press("d")
+        await settle(app, pilot)
+        counts = str(app.screen.query_one("#plan-counts").render())
+        assert "1 blocking audit finding" in counts and "migrate refuses" in counts
+        table = app.screen.query_one("#plan-table", DataTable)
+        notes = [str(table.get_row_at(i)[4]) for i in range(table.row_count)]
+        assert sum("BLOCKED: illegal_name" in n for n in notes) == 1
+
+
 async def test_full_flow_audit_dryrun_migrate_verify_lock():
     src, dst = setup()
     app = make_app(src, dst)

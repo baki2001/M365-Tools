@@ -227,7 +227,8 @@ case-insensitive too.
 | destination library resolvable (`destination`) | BLOCKING |
 | write access probe on destination folder (`write_access`) | BLOCKING |
 | quota: dst free >= src total * 1.1 (`quota`; INFO when usage/quota is unknown) | BLOCKING |
-| target path > 400 chars (`path_length`), illegal chars / leading-trailing space or dot / `~$` names (`illegal_name`) | BLOCKING per item |
+| target path > 400 chars (`path_length`), illegal chars, leading/trailing space, trailing dot, `~$` names, reserved names (`.lock`, `CON`, `desktop.ini`, ...) or `_vti_` (`illegal_name`); a leading dot is allowed | BLOCKING per item |
+| draw.io backups `.$*.bkp` that will be copied (`temp_files`; suggests the exclude `**/.$*.bkp`) | INFO |
 | unique permissions (`unique_permissions`) | WARN |
 | checked-out files (`checked_out`) | WARN per item |
 | version history (`versions`; only latest copied) | INFO |

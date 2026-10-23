@@ -15,6 +15,7 @@ from m365tools.tools.spmig.checks import (
     check_onenote,
     check_paths,
     check_quota,
+    check_temp_files,
     check_unique_permissions,
     check_users,
     check_versions,
@@ -98,6 +99,10 @@ async def test_paths_length_and_illegal_names():
         g.add_file("trailing.")
         g.add_file(" lead.txt")
         g.add_file('q"uote.txt')
+        g.add_file(".$Blokschema.drawio.bkp")  # draw.io backup: a leading dot is fine in SharePoint Online
+        g.add_file(".gitignore")
+        g.add_file("desktop.ini")
+        g.add_file("a_vti_b.txt")
 
     f = await check_paths(await make_ctx(src))
     by = {(x.category, x.path.rsplit("/", 1)[-1]): x.severity for x in f}
@@ -107,7 +112,21 @@ async def test_paths_length_and_illegal_names():
     assert by[("illegal_name", "trailing.")] == Severity.BLOCKING
     assert by[("illegal_name", " lead.txt")] == Severity.BLOCKING
     assert by[("illegal_name", 'q"uote.txt')] == Severity.BLOCKING
-    assert not any(x.path == "ok.txt" for x in f)
+    assert by[("illegal_name", "desktop.ini")] == Severity.BLOCKING
+    assert by[("illegal_name", "a_vti_b.txt")] == Severity.BLOCKING
+    for fine in ("ok.txt", ".$Blokschema.drawio.bkp", ".gitignore"):
+        assert not any(x.path == fine for x in f)
+
+
+async def test_temp_files_reports_drawio_backups_unless_excluded():
+    def src(g):
+        g.add_file("Schema/.$net.drawio.bkp")
+        g.add_file("Schema/net.drawio")
+
+    f = await check_temp_files(await make_ctx(src))
+    assert [(x.category, x.severity) for x in f] == [("temp_files", Severity.INFO)]
+    assert "1 draw.io backup" in f[0].detail
+    assert await check_temp_files(await make_ctx(src, excludes=["**/.$*.bkp"])) == []
 
 
 async def test_excluded_items_not_checked_for_names():
