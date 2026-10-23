@@ -122,8 +122,10 @@ class TypedConfirmModal(Dialog):
 
 
 class PromptModal(Dialog):
-    """One line of text. ``on_change`` sees every keystroke (live filtering); esc returns None."""
+    """One line of text. ``on_change`` follows the typing (live filtering), once the keys pause for
+    ``DEBOUNCE_S``; esc returns None."""
 
+    DEBOUNCE_S = 0.15
     BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "cancel", "cancel")]
 
     def __init__(self, title: str, value: str = "", *, placeholder: str = "", note: str = "",
@@ -133,6 +135,7 @@ class PromptModal(Dialog):
         self.placeholder = placeholder
         self.note = note
         self.on_change = on_change
+        self._timer: Timer | None = None
         if bottom:
             self.add_class("-bottom")
 
@@ -144,14 +147,25 @@ class PromptModal(Dialog):
 
     @on(Input.Changed)
     def _changed(self, event: Input.Changed) -> None:
-        if self.on_change is not None:
-            self.on_change(event.value)
+        if self.on_change is None:
+            return
+        if self._timer is not None:
+            self._timer.stop()
+        on_change, value = self.on_change, event.value
+        self._timer = self.set_timer(self.DEBOUNCE_S, lambda: on_change(value))
+
+    def _stop_timer(self) -> None:
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
 
     @on(Input.Submitted)
     def _submitted(self, event: Input.Submitted) -> None:
+        self._stop_timer()
         self.dismiss(event.value)
 
     def action_cancel(self) -> None:
+        self._stop_timer()
         self.dismiss(None)
 
 

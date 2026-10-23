@@ -36,12 +36,44 @@ class RunInfo:
 def _csv_column(path: Path, column: str) -> Counter[str]:
     try:
         with path.open(encoding="utf-8-sig", newline="") as fh:
-            return Counter(row.get(column, "") for row in csv.DictReader(fh, delimiter=";"))
+            rows = csv.reader(fh, delimiter=";")
+            header = next(rows, [])
+            if column not in header:
+                return Counter()
+            i = header.index(column)
+            return Counter(row[i] if i < len(row) else "" for row in rows)
     except OSError:
         return Counter()
 
 
+# A finished run folder does not change, but a dry run of 150k files leaves a results.csv that takes most of a
+# second to count. Summaries are kept per folder and only recomputed when a file in it changes.
+_SUMMARIES: dict[Path, tuple[tuple[tuple[str, int, int], ...], str]] = {}
+
+
+def _signature(run: Path) -> tuple[tuple[str, int, int], ...]:
+    out = []
+    for name in ("status.json", "findings.csv", "verify.csv", "results.csv", "lock.csv", "report.txt"):
+        try:
+            st = (run / name).stat()
+        except OSError:
+            continue
+        out.append((name, st.st_size, st.st_mtime_ns))
+    return tuple(out)
+
+
 def describe_run(run: Path, mode: str) -> str:
+    """:func:`summarise_run`, cached until one of the run's result files changes."""
+    sig = _signature(run)
+    hit = _SUMMARIES.get(run)
+    if hit is not None and hit[0] == sig:
+        return hit[1]
+    summary = summarise_run(run, mode)
+    _SUMMARIES[run] = (sig, summary)
+    return summary
+
+
+def summarise_run(run: Path, mode: str) -> str:
     """Best-effort one-liner from the files a run leaves behind (status.json, findings.csv, ...)."""
     status = run / "status.json"
     if status.exists():
@@ -68,14 +100,14 @@ def describe_run(run: Path, mode: str) -> str:
     return "no results (interrupted?)" if not (run / "report.txt").exists() else ""
 
 
-def list_all_runs() -> list[RunInfo]:
+def list_all_runs(limit: int | None = None) -> list[RunInfo]:
+    """Run folders, newest first; only the first ``limit`` are read for their summary."""
     root = runs_dir()
     if not root.exists():
         return []
+    folders = sorted((p for p in root.glob("*/*") if p.is_dir()), key=lambda p: p.name, reverse=True)
     out = []
-    for p in root.glob("*/*"):
-        if not p.is_dir():
-            continue
+    for p in folders[:limit]:
         parts = p.name.split("-")  # YYYYmmdd-HHMMSS-mode[-n]
         try:
             started = datetime.strptime("-".join(parts[:2]), "%Y%m%d-%H%M%S")
@@ -83,7 +115,7 @@ def list_all_runs() -> list[RunInfo]:
             started = None
         mode = parts[2] if len(parts) > 2 else "?"
         out.append(RunInfo(p, p.parent.name, mode, started, describe_run(p, mode)))
-    return sorted(out, key=lambda r: r.path.name, reverse=True)
+    return out
 
 
 class RunsSection(Section):
