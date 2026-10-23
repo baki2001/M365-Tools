@@ -91,6 +91,7 @@ class ChecksSection(Section):
         self.run_dir = run_dir
         if summary is not None:
             self.m365.last_audit = summary
+            self.m365.workspace.section("plan").run_state_changed()  # its "blocked by audit" notes
         blocking = sum(1 for f in findings if f.severity == "blocking")
         warn = sum(1 for f in findings if f.severity == "warn")
         self.status = theme.FAILED if blocking else theme.DONE
