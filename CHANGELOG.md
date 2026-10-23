@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- spmig Runs (`7`): Enter loads a run back into the workspace. The job gets the source, destination and options
+  the run used, Checks gets the audit findings and Plan gets the dry run, so you can continue to migrate after
+  restarting the TUI. Loading an audit also brings the newest dry run with the same job, and the other way
+  round. `t` now opens report.txt (Enter used to). The recent runs panel on the Job page says how.
 - Groups screen reworked for orientation: tabs with their keys (`1` Groups, the landing tab, `2` People,
   `3` Bundles); a "Get started" checklist is the default right pane (`0` or `esc` returns to it) with the
   next step and its key; `D` sets your own domains so only colleagues count; the People list shows a title or
