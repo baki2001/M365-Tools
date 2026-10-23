@@ -27,7 +27,7 @@ from .models import (
     Plan,
     Severity,
 )
-from .plan import ROUTE_UNAVAILABLE, is_excluded
+from .plan import ROUTE_UNAVAILABLE, glob_match, is_excluded
 from .usermap import ResolvedUsers, UserMap, collect_users
 
 MB = 1024 * 1024
@@ -35,6 +35,13 @@ ESTIMATE_MBPS = 0.7
 QUOTA_HEADROOM = 1.1
 LARGE_FILE_BYTES = 100 * MB
 ILLEGAL_CHARS = re.compile(r'["*:<>?/\\|]')
+# Names SharePoint Online and OneDrive refuse outright (Microsoft's "Restrictions and limitations in OneDrive and
+# SharePoint"). A *leading* dot is allowed there (".gitignore", draw.io's ".$name.drawio.bkp" backups).
+RESERVED_NAMES: frozenset[str] = frozenset({
+    ".lock", "con", "prn", "aux", "nul", "desktop.ini",
+    *(f"com{i}" for i in range(10)), *(f"lpt{i}" for i in range(10)),
+})
+DRAWIO_BACKUP = "**/.$*.bkp"
 
 # Columns SharePoint (or Microsoft 365 services) add by themselves; never reported as "missing at destination".
 SYSTEM_FIELDS: frozenset[str] = frozenset({
@@ -203,10 +210,14 @@ def _name_problem(name: str) -> str | None:
         return "contains illegal character(s) " + " ".join(bad)
     if name != name.strip(" "):
         return "starts or ends with a space"
-    if name.startswith(".") or name.endswith("."):
-        return "starts or ends with a dot"
+    if name.endswith("."):
+        return "ends with a dot"
     if name.startswith("~$"):
         return "is an Office lock/temp file (~$)"
+    if name.lower() in RESERVED_NAMES:
+        return "is a reserved name"
+    if "_vti_" in name.lower():
+        return "contains '_vti_'"
     return None
 
 
@@ -235,6 +246,19 @@ async def check_paths(ctx: CheckContext) -> list[Finding]:
                 "(e.g. '**/~$*' for Office lock files).",
             ))
     return out
+
+
+async def check_temp_files(ctx: CheckContext) -> list[Finding]:
+    """draw.io keeps a ``.$<name>.drawio.bkp`` backup next to every diagram. Valid in SharePoint, but clutter."""
+    files = [i for i in ctx.migrating_files() if glob_match(DRAWIO_BACKUP, i.rel_path)]
+    if not files:
+        return []
+    examples = ", ".join(i.rel_path for i in files[:3])
+    return [Finding(
+        Severity.INFO, "temp_files", ctx.src_inv.base_url,
+        f"{len(files)} draw.io backup file(s) (.$*.bkp) will be copied (e.g. {examples}).",
+        f"Optional: add the exclude '{DRAWIO_BACKUP}' to leave them behind; the real .drawio files are unaffected.",
+    )]
 
 
 async def check_unique_permissions(ctx: CheckContext) -> list[Finding]:
@@ -418,6 +442,7 @@ CHECKS: list[Check] = [
     check_write_access,
     check_quota,
     check_paths,
+    check_temp_files,
     check_unique_permissions,
     check_checked_out,
     check_versions,

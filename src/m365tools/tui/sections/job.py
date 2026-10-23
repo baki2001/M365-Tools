@@ -167,7 +167,7 @@ class JobSection(Section):
         pipe.border_title = "pipeline"
         yield pipe
         runs = Static("", id="recent-runs", classes="panel")
-        runs.border_title = "recent runs"
+        runs.border_title = "recent runs · 7 then enter loads one back"
         yield runs
 
     def on_mount(self) -> None:

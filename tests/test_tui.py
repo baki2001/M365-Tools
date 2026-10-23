@@ -205,6 +205,24 @@ async def test_audit_shows_findings_and_blocking_count_then_migrate_demands_forc
         assert not dst.write_calls()
 
 
+async def test_dryrun_marks_items_the_audit_blocked():
+    src, dst = setup()
+    src.add_file("Klanten/~$lock.docx")  # BLOCKING illegal_name
+    app = make_app(src, dst)
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.load_profile("svc")
+        await pilot.press("a")
+        await settle(app, pilot)
+        assert app.last_audit is not None and len(app.last_audit.blocking) == 1
+        await pilot.press("d")
+        await settle(app, pilot)
+        counts = str(app.screen.query_one("#plan-counts").render())
+        assert "1 blocking audit finding" in counts and "migrate refuses" in counts
+        table = app.screen.query_one("#plan-table", DataTable)
+        notes = [str(table.get_row_at(i)[4]) for i in range(table.row_count)]
+        assert sum("BLOCKED: illegal_name" in n for n in notes) == 1
+
+
 async def test_full_flow_audit_dryrun_migrate_verify_lock():
     src, dst = setup()
     app = make_app(src, dst)
@@ -375,3 +393,38 @@ async def test_checks_step_list_shows_running_step_then_collapses():
         summary = rendered(steps.render()).strip()
         assert summary.startswith("● audit took ") and "slowest" in summary
         assert all(st.state == "done" for st in steps.steps)
+
+
+async def test_runs_enter_loads_job_audit_and_plan():
+    """A fresh session gets the job, the audit findings and the dry run plan back from the run folders."""
+    app = make_app()
+    async with app.run_test(size=(140, 45)) as pilot:
+        app.load_profile("svc")
+        await pilot.press("a")
+        await settle(app, pilot)
+        await pilot.press("d")
+        await settle(app, pilot)
+        opts = app.opts
+        n_findings = len(app.screen.query_one("#checks").findings)
+        n_entries = len(app.screen.query_one("#plan").plan.entries)
+
+    app = make_app()
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        assert not app.endpoints_ready()
+        await pilot.press("7", "tab")
+        await pilot.pause()
+        runs = app.screen.query_one("#runs")
+        assert [r.mode for r in runs.runs[:2]] == ["dryrun", "audit"]
+        await pilot.press("j", "enter")  # the audit row
+        await settle(app, pilot)
+        assert app.opts.source == opts.source and app.opts.destination == opts.destination
+        assert app.screen.query_one(ContentSwitcher).current == "checks"
+        assert len(app.screen.query_one("#checks").findings) == n_findings
+        assert app.last_audit is not None
+        plan = app.screen.query_one("#plan").plan
+        assert plan is not None and len(plan.entries) == n_entries  # the dry run came along
+
+        await pilot.press("7", "t")  # focus stays in the main pane
+        await pilot.pause()
+        assert isinstance(app.screen, TextModal)

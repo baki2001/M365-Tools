@@ -16,7 +16,7 @@ from m365tools.tools.spmig.models import Action, Plan, PlanEntry
 
 from .. import theme
 from ..modals import PromptModal
-from ..theme import ACTION_LABEL, ACTION_STYLE, FG, MAUVE, SUB
+from ..theme import ACTION_LABEL, ACTION_STYLE, FG, MAUVE, RED, SUB
 from ..widgets import StepList, VimTable
 from .base import Empty, Section
 
@@ -86,6 +86,12 @@ class PlanSection(Section):
         self.plan = None
         self._redraw()
 
+    def _blocked(self) -> dict[str, str]:
+        """rel_path (lower) -> check name, for items the last audit flagged as blocking. The plan itself only
+        says what a migration would do with each item; migrate refuses to start while these remain."""
+        audit = self.m365.last_audit
+        return {f.path.strip("/").lower(): f.category for f in audit.blocking} if audit is not None else {}
+
     def _matches(self, e: PlanEntry, words: list[str]) -> bool:
         if self.kind_filter and e.action != self.kind_filter:
             return False
@@ -105,6 +111,12 @@ class PlanSection(Section):
         line.append(" f ", style=SUB).append(ACTION_LABEL.get(self.kind_filter or "", "all"), style=f"bold {MAUVE}")
         if self.filter_text:
             line.append("  / ", style=SUB).append(self.filter_text, style=f"bold {MAUVE}")
+        blocked = self._blocked()
+        n_blocked = sum(1 for e in plan.entries if e.item.rel_path.strip("/").lower() in blocked)
+        if blocked:
+            line.append(f"\n● {len(blocked):,} blocking audit finding(s)", style=f"bold {RED}")
+            line.append(f" · {n_blocked:,} of these planned items are affected; migrate refuses until they are "
+                        "fixed or excluded (2 checks)", style=SUB)
         self.query_one("#plan-counts", Static).update(line)
         words = self.filter_text.lower().split()
         shown = [e for e in plan.entries if self._matches(e, words)]
@@ -113,7 +125,9 @@ class PlanSection(Section):
         for e in shown[:MAX_ROWS]:
             it = e.item
             color = ACTION_STYLE.get(e.action, SUB)
-            note = " · ".join(p for p in (e.reason, f"route {e.route}" if e.route else "") if p)
+            check = blocked.get(it.rel_path.strip("/").lower())
+            note = " · ".join(p for p in (f"BLOCKED: {check}" if check else "", e.reason,
+                                          f"route {e.route}" if e.route else "") if p)
             table.add_row(theme.glyph_word(ACTION_LABEL.get(e.action, e.action), color, theme.BLOCK),
                           Text(it.rel_path + ("/" if it.is_folder else ""), style=FG, no_wrap=True,
                                overflow="ellipsis"),
