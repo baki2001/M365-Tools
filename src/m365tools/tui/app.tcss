@@ -48,22 +48,18 @@ Screen {
 }
 
 #sidebar > .option-list--option {
-    padding: 0 1;
+    padding: 0 1 0 0;
 }
 
 #sidebar > .option-list--separator {
     color: transparent;
 }
 
-#sidebar > .option-list--option-highlighted {
-    background: $surface1;
-    color: $foreground;
-    text-style: none;
-}
-
+/* the selected entry draws its own thin accent edge (BarList), so no filled bar */
+#sidebar > .option-list--option-highlighted,
 #sidebar:focus > .option-list--option-highlighted {
-    background: $accent;
-    color: $on-fill;
+    background: transparent;
+    color: $foreground;
     text-style: none;
 }
 
@@ -73,7 +69,7 @@ Screen {
 
 #nav-status {
     height: auto;
-    padding: 0 1;
+    padding: 0 1 1 1;
     border-top: solid $surface0;
     background: $bg-alt;
 }
@@ -147,8 +143,8 @@ DataTable > .datatable--cursor {
 }
 
 DataTable:focus > .datatable--cursor {
-    background: $accent;
-    color: $on-fill;
+    background: $surface1;
+    color: $foreground;
     text-style: bold;
 }
 
@@ -347,7 +343,7 @@ PercentageStatus {
 /* ---------------------------------------------------------------- shared nav lists (home tools, groups list) */
 
 #tools > .option-list--option, #glist > .option-list--option, #oruns > .option-list--option {
-    padding: 0 1;
+    padding: 0 1 0 0;
 }
 
 #tools > .option-list--separator {
@@ -355,16 +351,11 @@ PercentageStatus {
 }
 
 #tools > .option-list--option-highlighted, #glist > .option-list--option-highlighted,
-#oruns > .option-list--option-highlighted {
-    background: $surface1;
-    color: $foreground;
-    text-style: none;
-}
-
+#oruns > .option-list--option-highlighted,
 #tools:focus > .option-list--option-highlighted, #glist:focus > .option-list--option-highlighted,
 #oruns:focus > .option-list--option-highlighted {
-    background: $accent;
-    color: $on-fill;
+    background: transparent;
+    color: $foreground;
     text-style: none;
 }
 
@@ -601,7 +592,6 @@ ModalScreen {
     background: transparent;
 }
 
-.-theme-terminal OptionList > .option-list--option-highlighted,
 .-theme-terminal DataTable > .datatable--cursor {
     background: ansi_default;
     text-style: reverse;
@@ -689,14 +679,14 @@ ModalScreen {
 }
 
 .dialog OptionList > .option-list--option {
-    padding: 0 1;
+    padding: 0 1 0 0;
 }
 
 .dialog OptionList > .option-list--option-highlighted,
 .dialog OptionList:focus > .option-list--option-highlighted {
-    background: $accent;
-    color: $on-fill;
-    text-style: bold;
+    background: transparent;
+    color: $foreground;
+    text-style: none;
 }
 
 #options-list {

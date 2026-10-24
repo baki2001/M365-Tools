@@ -16,7 +16,7 @@ from m365tools.tools.spmig.models import Action, Plan, PlanEntry
 
 from .. import theme
 from ..modals import PromptModal
-from ..theme import ACTION_LABEL, ACTION_STYLE, FG, RED, SUB
+from ..theme import ACTION_LABEL, ACTION_STYLE, DIM, FG, RED, SUB
 from ..widgets import StepList, VimTable
 from .base import Empty, Section
 
@@ -113,9 +113,8 @@ class PlanSection(Section):
         n_blocked = sum(1 for e in plan.entries if e.item.rel_path.strip("/").lower() in blocked)
         if blocked:
             line.append("\n").append_text(theme.notice(
-                RED, (theme.plural(len(blocked), "blocking audit finding"), f"bold {RED}"),
-                f" · {theme.plural(n_blocked, 'planned item')} affected · migrate refuses until they are fixed "
-                "or excluded (see 2 Checks)"))
+                RED, (theme.plural(len(blocked), "blocking finding"), RED),
+                f" · {theme.plural(n_blocked, 'planned item')} affected · fix or exclude them in 2 Checks"))
         self.query_one("#plan-counts", Static).update(line)
         words = self.filter_text.lower().split()
         shown = [e for e in plan.entries if self._matches(e, words)]
@@ -134,15 +133,13 @@ class PlanSection(Section):
                           Text(f"{it.modified:%Y-%m-%d %H:%M}" if it.modified else "", style=SUB),
                           Text(note, style=SUB, no_wrap=True, overflow="ellipsis"))
         files = [e for e in shown if not e.item.is_folder]
-        tot = Text(no_wrap=True, overflow="ellipsis")
-        tot.append(f"{len(shown):,}", style=f"bold {FG}").append(" entries", style=SUB)
-        tot.append("   ").append(f"{len(files):,}", style=f"bold {FG}").append(" files", style=SUB)
-        tot.append("   ").append(theme.size(sum(e.item.size for e in files)), style=f"bold {FG}")
-        tot.append(" total", style=SUB)
-        tot.append("   ").append(theme.size(plan.bytes_to_copy()), style=f"bold {theme.GREEN}")
-        tot.append(" to copy", style=SUB)
+        parts = [(f"{len(shown):,}", " entries"), (f"{len(files):,}", " files"),
+                 (theme.size(sum(e.item.size for e in files)), " total"), (theme.size(plan.bytes_to_copy()), " to copy")]
+        tot = Text(no_wrap=True, overflow="ellipsis", style=DIM)
+        for i, (value, label) in enumerate(parts):
+            tot.append(" · " if i else "").append(value, style=SUB).append(label)
         if len(shown) > MAX_ROWS:
-            tot.append(f"   first {MAX_ROWS:,} rows shown (see plan.json)", style=theme.YELLOW)
+            tot.append(f" · first {MAX_ROWS:,} rows shown, the rest is in plan.json")
         self.query_one("#plan-totals", Static).update(tot)
 
     def action_cycle_filter(self) -> None:
