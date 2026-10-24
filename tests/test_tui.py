@@ -217,7 +217,7 @@ async def test_dryrun_marks_items_the_audit_blocked():
         await pilot.press("d")
         await settle(app, pilot)
         counts = str(app.screen.query_one("#plan-counts").render())
-        assert "1 blocking audit finding" in counts and "migrate refuses" in counts
+        assert "1 blocking finding" in counts and "fix or exclude" in counts
         table = app.screen.query_one("#plan-table", DataTable)
         notes = [str(table.get_row_at(i)[4]) for i in range(table.row_count)]
         assert sum("BLOCKED: illegal_name" in n for n in notes) == 1

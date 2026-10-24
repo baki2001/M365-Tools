@@ -14,6 +14,12 @@
   The Job pipeline uses the sidebar's state glyphs. The header lists all three tools with the open one
   marked. Log lines wrap under the message, not under the time. Counts use proper plurals ("1 run",
   "2 runs") instead of "run(s)".
+- Quieter edges. The header keeps the brand, the tools and the signed-in account in grey; tenant and profile
+  moved to the bottom of the sidebar. The key bar shows only the keys for the screen you are on, and `?` lists
+  the rest (audit, dry run, migrate, verify, `:`, `g` and `q` still work everywhere). Keys are coloured text
+  instead of boxed chips. The selected entry in the sidebar, the home tool list, the groups list, onboard runs
+  and pickers is marked with a thin accent line on its left instead of a filled bar, and the table cursor is a
+  soft grey band. The groups tabs are no longer filled. Plan's totals line is a single grey line.
 - spmig Runs (`7`): Enter loads a run back into the workspace. The job gets the source, destination and options
   the run used, Checks gets the audit findings and Plan gets the dry run, so you can continue to migrate after
   restarting the TUI. Loading an audit also brings the newest dry run with the same job, and the other way

@@ -210,14 +210,14 @@ class GroupsScreen(GroupsOpsScreen):
         Binding("D", "domains", "domains", show=False),
         Binding("r", "reload", "reload", show=False),
         Binding("L", "toggle_log", "log", show=False),
-        Binding("colon", "app.command_palette", "commands", key_display=":"),
+        Binding("colon", "app.command_palette", "commands", key_display=":", show=False),
         Binding("question_mark", "help", "help", key_display="?"),
         Binding("ctrl+l", "app.login", "sign in", show=False),
-        Binding("g", "app.go_home", "home", priority=True),
+        Binding("g", "app.go_home", "home", priority=True, show=False),
         Binding("ctrl+1", "app.tool(1)", "spmig", show=False, priority=True),
         Binding("ctrl+2", "app.tool(2)", "groups", show=False, priority=True),
         Binding("ctrl+3", "app.tool(3)", "onboard", show=False, priority=True),
-        Binding("q", "app.quit_app", "quit"),
+        Binding("q", "app.quit_app", "quit", show=False),
     ]
 
     def __init__(self) -> None:
@@ -364,11 +364,12 @@ class GroupsScreen(GroupsOpsScreen):
                   "bundles": len(reg.bundles)}
         t = Text(no_wrap=True)
         for i, (key, title) in enumerate(TABS, 1):
+            t.append_text(theme.chip(str(i)))
             if key == self.mode:
-                t.append_text(theme.pill(f"{i} {title} {counts[key]}", ACCENT))
+                t.append(f" {title}", style=f"bold {ACCENT}").append(f" {counts[key]}", style=SUB)
             else:
-                t.append_text(theme.chip(str(i))).append(f" {title}", style=FG)
-            t.append(" ")
+                t.append(f" {title}", style=SUB)
+            t.append("   ")
         self.query_one("#gtabs", Static).update(t)
         f = self.query_one("#gfilter", Static)
         f.display = bool(self.filter_text)

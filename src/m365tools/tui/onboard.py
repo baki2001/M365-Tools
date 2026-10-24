@@ -29,7 +29,7 @@ from .groups_view import FINDING_LABEL, change_status, group_rows, people_rows, 
 from .home import ago
 from .modals import Choice, PickerModal, PromptModal, TextModal, TypedConfirmModal
 from .sections.base import Empty
-from .theme import ACCENT, BLUE, DIM, FG, GREEN, ON_FILL, ORANGE, RED, SEVERITY_STYLE, SUB, YELLOW
+from .theme import ACCENT, BLUE, DIM, FG, GREEN, ORANGE, RED, SEVERITY_STYLE, SUB, YELLOW
 from .widgets import Activity, BarList, BarOption, HeaderBar, KeyBar, StepList, VimLog, VimTable
 from .workspace import BACK_HELP
 
@@ -80,17 +80,17 @@ class OnboardScreen(GroupsOpsScreen):
         Binding("i", "inventory", "inventory"),
         Binding("A", "apply", "apply"),
         Binding("L", "toggle_log", "log", show=False),
-        Binding("colon", "app.command_palette", "commands", key_display=":"),
+        Binding("colon", "app.command_palette", "commands", key_display=":", show=False),
         Binding("question_mark", "help", "help", key_display="?"),
         Binding("ctrl+l", "app.login", "sign in", show=False),
-        Binding("g", "app.go_home", "home", priority=True),
+        Binding("g", "app.go_home", "home", priority=True, show=False),
         Binding("ctrl+1", "app.tool(1)", "spmig", show=False, priority=True),
         Binding("ctrl+2", "app.tool(2)", "groups", show=False, priority=True),
         Binding("ctrl+3", "app.tool(3)", "onboard", show=False, priority=True),
         Binding("1", "app.tool(1)", "spmig", show=False),
         Binding("2", "app.tool(2)", "groups", show=False),
         Binding("3", "app.tool(3)", "onboard", show=False),
-        Binding("q", "app.quit_app", "quit"),
+        Binding("q", "app.quit_app", "quit", show=False),
     ]
 
     def __init__(self) -> None:
@@ -517,9 +517,7 @@ def _run_maker(run: Path) -> Callable[[bool], Text]:
 
     def make(selected: bool) -> Text:
         t = Text(no_wrap=True, overflow="ellipsis")
-        if selected:
-            return t.append(f"{mode:<9}{upn}\n  {state} · {when}", style=ON_FILL)
-        t.append(f"{mode:<9}", style=GREEN if mode == "onboard" else ORANGE).append(upn, style=FG)
+        t.append(f"{mode:<9}", style=GREEN if mode == "onboard" else ORANGE).append(upn, style=f"bold {ACCENT}" if selected else FG)
         return t.append(f"\n  {state} · {when}", style=SUB if state == "applied" else DIM)
 
     return make

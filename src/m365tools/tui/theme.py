@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, fields
 from functools import lru_cache
+from typing import Any
 
 from rich.color import Color as RichColor
 from rich.segment import Segment
@@ -277,8 +278,29 @@ def pill(text: str, color: str, *, fg: str = ON_FILL, bold: bool = True) -> Text
 
 
 def chip(key: str) -> Text:
-    """A key as a chip: `` a `` in bold text on surface1."""
-    return Text.assemble((f" {key} ", f"bold {FG} on {SURFACE1}"))
+    """A key: ``a`` in bold key colour. No box around it, so rows of keys stay quiet."""
+    return Text.assemble((key, f"bold {KEY}"))
+
+
+EDGE = "▎"
+
+
+def edged(content: Any, color: str | None) -> Any:
+    """A list entry with a thin edge on its left, on every line of ``content``: ``color`` for the selected entry,
+    ``None`` for a blank column so the entries line up."""
+    mark = Text(f"{EDGE} ", style=color) if color else Text("  ")
+    if isinstance(content, Text):
+        out = Text(no_wrap=content.no_wrap, overflow=content.overflow)
+        for i, line in enumerate(content.split("\n", allow_blank=True)):
+            if i:
+                out.append("\n")
+            out.append_text(mark).append_text(line)
+        return out
+    grid = Table.grid(expand=True)
+    grid.add_column(width=2, no_wrap=True)
+    grid.add_column(ratio=1)
+    grid.add_row(mark, content)
+    return grid
 
 
 def key_hint(key: str, description: str) -> Text:
@@ -286,7 +308,7 @@ def key_hint(key: str, description: str) -> Text:
     return Text.assemble(chip(key), " ", (description, SUB))
 
 
-def key_hints(pairs: Iterable[tuple[str, str]], sep: str = "  ") -> Text:
+def key_hints(pairs: Iterable[tuple[str, str]], sep: str = "   ") -> Text:
     t = Text()
     for i, (k, d) in enumerate(pairs):
         if i:
