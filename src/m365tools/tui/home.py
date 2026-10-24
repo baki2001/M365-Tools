@@ -25,7 +25,7 @@ from textual.widgets.option_list import Option
 
 from . import theme
 from .modals import TextModal
-from .theme import ACCENT, DIM, FG, KEY, ON_FILL, SUB
+from .theme import ACCENT, DIM, FG, KEY, SUB
 from .widgets import BRAND, MARK, BarList, BarOption, HeaderBar, KeyBar
 
 if TYPE_CHECKING:
@@ -102,16 +102,11 @@ def tool_entry(tool: Tool, last: LastRun | None, selected: bool) -> Table:
     grid.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
     grid.add_column(justify="right", no_wrap=True)
     if last is None:
-        run = Text("no runs yet", style=ON_FILL if selected else DIM)
+        run = Text("no runs yet", style=DIM)
     else:
-        run = Text.assemble(("last ", ON_FILL if selected else DIM), (last.mode, ON_FILL if selected else FG),
-                            (f" · {ago(last.started)}", ON_FILL if selected else SUB))
-    if selected:
-        grid.add_row(Text(f" {tool.number}", style=f"bold {ON_FILL}"), Text(tool.key, style=f"bold {ON_FILL}"),
-                     Text(tool.title, style=ON_FILL), run)
-    else:
-        grid.add_row(Text(f" {tool.number}", style=f"bold {KEY}"), Text(tool.key, style=f"bold {FG}"),
-                     Text(tool.title, style=SUB), run)
+        run = Text.assemble(("last ", DIM), (last.mode, FG), (f" · {ago(last.started)}", SUB))
+    grid.add_row(Text(f" {tool.number}", style=f"bold {KEY}"), Text(tool.key, style=f"bold {ACCENT if selected else FG}"),
+                 Text(tool.title, style=SUB), run)
     return grid
 
 
@@ -137,9 +132,9 @@ class HomeScreen(Screen[None]):
         *[Binding(str(t.number), f"open({t.number})", t.key, show=False) for t in TOOLS],
         Binding("t", "app.pick_tenant", "tenant"),
         Binding("ctrl+l", "app.login", "sign in", key_display="ctrl+l"),
-        Binding("colon", "app.command_palette", "commands", key_display=":"),
+        Binding("colon", "app.command_palette", "commands", key_display=":", show=False),
         Binding("question_mark", "help", "help", key_display="?"),
-        Binding("q", "app.quit_app", "quit"),
+        Binding("q", "app.quit_app", "quit", show=False),
     ]
     HELP = ("This is the toolbox home. esc in a tool goes back one step at a time and ends here. Each tool has its own screen with the same keys: j/k to move, enter to "
             "open, : for every command, ? for help. g in any tool brings you back here.")

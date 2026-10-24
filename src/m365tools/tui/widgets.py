@@ -30,7 +30,7 @@ from m365tools.core.events import (
 from m365tools.core.report.format import fmt_elapsed
 
 from . import theme
-from .theme import ACCENT, DIM, FG, GLYPH, GLYPH_STYLE, KEY, ON_FILL, SPINNER, SUB, YELLOW
+from .theme import ACCENT, DIM, FG, GLYPH, GLYPH_STYLE, KEY, SPINNER, SUB, YELLOW
 
 if TYPE_CHECKING:
     from .app import M365App
@@ -105,20 +105,21 @@ class VimList(OptionList):
 
 
 class BarOption(Option):
-    """An option that can render itself twice: normal (coloured) and selected (plain, for the filled bar)."""
+    """An option that renders itself through ``make(selected)``, so the list can redraw it when the highlight
+    moves."""
 
     def __init__(self, make: Callable[[bool], VisualType], id: str | None = None) -> None:
         self.make = make
-        super().__init__(make(False), id=id)
+        super().__init__(theme.edged(make(False), None), id=id)
 
 
 class BarList(VimList):
-    """The highlighted entry is a filled bar: mauve with crust text while the list is active, surface1 when not.
+    """The highlighted entry gets a thin edge on its left: accent while the list is active, dim when not. Entries
+    keep their own colours; there is no filled bar.
 
-    ``BarOption`` prompts are re-rendered when the highlight or focus changes, so the selected entry drops its
-    value colours (which would not read on mauve)."""
+    ``BarOption`` prompts are re-rendered when the highlight or focus changes, so the edge follows them."""
 
-    ALWAYS_ACTIVE: ClassVar[bool] = False  # pickers: the list never has focus but the bar is always live
+    ALWAYS_ACTIVE: ClassVar[bool] = False  # pickers: the list never has focus but the edge is always live
 
     def _active(self) -> bool:
         # screen.focused is updated before Focus/Blur are delivered (has_focus only after our handlers ran)
@@ -130,7 +131,10 @@ class BarList(VimList):
                 continue
             opt = self.get_option_at_index(i)
             if isinstance(opt, BarOption):
-                self.replace_option_prompt_at_index(i, opt.make(i == self.highlighted and self._active()))
+                lit = i == self.highlighted
+                active = lit and self._active()
+                edge = ACCENT if active else (DIM if lit else None)
+                self.replace_option_prompt_at_index(i, theme.edged(opt.make(active), edge))
         self.refresh()
 
     def watch_highlighted(self, old: int | None, new: int | None) -> None:
@@ -186,7 +190,7 @@ BRAND = "m365 toolbox"
 
 class HeaderBar(Widget):
     """Top line, the same on every screen: ``◆ m365 toolbox`` | busy pill and the tools (the open one
-    marked, the others with their key) | profile, tenant and signed-in account."""
+    marked, the others with their key) | the signed-in account, quietly. Tenant and profile live in NavStatus."""
 
     def __init__(self, tool: str = "", *, id: str | None = None) -> None:
         super().__init__(id=id)
@@ -217,13 +221,11 @@ class HeaderBar(Widget):
             else:
                 mid.append(f"{'^' if self.tool else ''}{i} ", style=KEY).append(t, style=SUB)
         right = Text()
-        if self.tool == "spmig":
-            right.append("profile ", style=DIM).append(app.opts.profile or "unsaved",
-                                                      style=FG if app.opts.profile else DIM)
-            right.append("   ")
-        right.append("tenant ", style=DIM).append(app.tenant or "none", style=FG if app.tenant else theme.ORANGE)
-        right.append("   ")
-        right.append(app.account or "not signed in", style=FG if app.account else DIM).append(" ")
+        if app.account:
+            right.append(f"{theme.DOT} ", style=theme.GREEN).append(app.account, style=DIM)
+        else:
+            right.append("○ ", style=DIM).append("not signed in", style=DIM)
+        right.append("  ")
         grid.add_row(left, mid, right)
         return grid
 
@@ -300,16 +302,12 @@ SIDEBAR_TEXT = 22  # 26 columns - 2 x 1 padding - 2 indent
 
 def sidebar_entry(number: int, title: str, status: str, summary: str, *, hint: str = "", selected: bool = False,
                   frame: int = 0) -> Text:
-    """``● 1  Job`` / ``  12 files · 4.1 MB``. Selected: plain crust text (it sits on the mauve bar)."""
+    """``● 1  Job`` / ``  12 files · 4.1 MB``. Selected: the title in the accent colour (the list draws the edge)."""
     glyph = SPINNER[frame % len(SPINNER)] if status == theme.RUNNING else GLYPH[status]
     line2 = fit(summary or hint, SIDEBAR_TEXT)
     t = Text()
-    if selected:
-        t.append(f"{glyph} ", style=f"bold {ON_FILL}").append(f"{number}  ", style=ON_FILL)
-        t.append(title, style=f"bold {ON_FILL}").append("\n  ").append(line2, style=ON_FILL)
-        return t
     t.append(f"{glyph} ", style=GLYPH_STYLE[status]).append(f"{number}  ", style=KEY)
-    t.append(title, style=f"bold {FG}").append("\n  ")
+    t.append(title, style=f"bold {ACCENT if selected else FG}").append("\n  ")
     t.append(line2, style=SUB if summary and status != theme.TODO else DIM)
     return t
 
@@ -357,7 +355,7 @@ class Sidebar(BarList):
 
 
 class NavStatus(Widget):
-    """Bottom of the sidebar: who is signed in, or how to sign in."""
+    """Bottom of the sidebar, in quiet text: the tenant (or how to sign in) and the loaded profile."""
 
     @property
     def m365(self) -> M365App:
@@ -368,15 +366,13 @@ class NavStatus(Widget):
 
     def render(self) -> Text:
         app = self.m365
-        t = Text()
+        t = Text(style=DIM)
         if app.account:
-            t.append("● ", style=theme.GREEN).append("signed in\n", style=FG)
-            t.append(fit(app.account, 24), style=SUB)
+            t.append("tenant  ").append(fit(app.tenant or "none", 16), style=SUB)
         else:
-            t.append("○ ", style=DIM).append("not signed in\n", style=FG)
-            t.append_text(theme.key_hint("ctrl+l", "to sign in"))
-        if app.tenant:
-            t.append("\n").append("tenant ", style=DIM).append(fit(app.tenant, 17), style=SUB)
+            t.append_text(theme.key_hint("ctrl+l", "signs in"))
+        t.append("\nprofile ").append(fit(app.opts.profile, 16) if app.opts.profile else "unsaved",
+                                       style=SUB if app.opts.profile else DIM)
         return t
 
 

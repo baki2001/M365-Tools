@@ -19,9 +19,9 @@ from m365tools.tools.groups.models import Finding, Registry, Snapshot, norm
 from m365tools.tools.groups.registry import bundles_with
 
 from . import theme
-from .theme import ACCENT, BLUE, CYAN, DIM, FG, GREEN, ON_FILL, ORANGE, RED, SUB, YELLOW
+from .theme import ACCENT, BLUE, CYAN, DIM, FG, GREEN, ORANGE, RED, SUB, YELLOW
 
-LIST_TEXT = 34  # list width minus padding and scrollbar
+LIST_TEXT = 33  # list width minus padding and scrollbar
 
 # ------------------------------------------------------------------------------------------------ states
 
@@ -95,10 +95,7 @@ class Row:
         name = theme_fit(self.name, width - 2 - len(hint) - 1)
         pad = max(width - 2 - len(name) - len(hint), 1)
         t = Text(no_wrap=True, overflow="ellipsis")
-        if selected:
-            t.append(f"{glyph} ", style=f"bold {ON_FILL}").append(name, style=f"bold {ON_FILL}")
-            return t.append(" " * pad).append(hint, style=ON_FILL)
-        t.append(f"{glyph} ", style=color).append(name, style=FG)
+        t.append(f"{glyph} ", style=color).append(name, style=f"bold {ACCENT}" if selected else FG)
         return t.append(" " * pad).append(hint, style=DIM)
 
 

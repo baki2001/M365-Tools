@@ -30,7 +30,7 @@ from m365tools.core.events import AuthPrompt
 from m365tools.tools.spmig.models import JobOptions
 
 from . import theme
-from .theme import ACCENT, BLUE, DIM, FG, KEY, ON_FILL, RED, SUB, YELLOW
+from .theme import ACCENT, BLUE, DIM, FG, KEY, RED, SUB, YELLOW
 from .widgets import BarList, BarOption, VimScroll
 
 
@@ -180,9 +180,9 @@ class Choice:
     extra: Text | None = None  # shown after the detail as is (the theme picker's colour swatches)
 
     def prompt(self, selected: bool = False) -> Text:
-        t = Text(self.label, style=f"bold {ON_FILL if selected else FG}")
+        t = Text(self.label, style=f"bold {ACCENT if selected else FG}")
         if self.detail:
-            t.append("  ").append(self.detail, style=ON_FILL if selected else SUB)
+            t.append("  ").append(self.detail, style=SUB)
         if self.extra is not None:
             t.append("  ").append_text(self.extra)
         return t
@@ -393,9 +393,7 @@ class OptionsModal(Dialog):
 
         def maker(key: str) -> Any:
             def make(selected: bool) -> Text:
-                if selected:
-                    return Text.assemble((f"{labels[key]:<20}", ON_FILL), (values[key], f"bold {ON_FILL}"))
-                return Text.assemble((f"{labels[key]:<20}", SUB), (values[key], f"bold {BLUE}"))
+                return Text.assemble((f"{labels[key]:<20}", FG if selected else SUB), (values[key], f"bold {BLUE}"))
             return make
 
         return [BarOption(maker(k), id=k) for k in self.ROWS]
