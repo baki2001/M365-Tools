@@ -16,7 +16,7 @@ from m365tools.tools.spmig.models import Action, Plan, PlanEntry
 
 from .. import theme
 from ..modals import PromptModal
-from ..theme import ACTION_LABEL, ACTION_STYLE, FG, MAUVE, RED, SUB
+from ..theme import ACTION_LABEL, ACTION_STYLE, FG, RED, SUB
 from ..widgets import StepList, VimTable
 from .base import Empty, Section
 
@@ -107,16 +107,15 @@ class PlanSection(Section):
         if plan is None:
             return
         counts = {a.value: n for a, n in plan.counts().items()}
-        line = theme.counts_line(counts, ACTION_STYLE, ACTION_LABEL)
-        line.append(" f ", style=SUB).append(ACTION_LABEL.get(self.kind_filter or "", "all"), style=f"bold {MAUVE}")
-        if self.filter_text:
-            line.append("  / ", style=SUB).append(self.filter_text, style=f"bold {MAUVE}")
+        line = theme.facets(theme.counts_line(counts, ACTION_STYLE, ACTION_LABEL),
+                            [("f", ACTION_LABEL.get(self.kind_filter or "", "all")), ("/", self.filter_text)])
         blocked = self._blocked()
         n_blocked = sum(1 for e in plan.entries if e.item.rel_path.strip("/").lower() in blocked)
         if blocked:
-            line.append(f"\n● {len(blocked):,} blocking audit finding(s)", style=f"bold {RED}")
-            line.append(f" · {n_blocked:,} of these planned items are affected; migrate refuses until they are "
-                        "fixed or excluded (2 checks)", style=SUB)
+            line.append("\n").append_text(theme.notice(
+                RED, (theme.plural(len(blocked), "blocking audit finding"), f"bold {RED}"),
+                f" · {theme.plural(n_blocked, 'planned item')} affected · migrate refuses until they are fixed "
+                "or excluded (see 2 Checks)"))
         self.query_one("#plan-counts", Static).update(line)
         words = self.filter_text.lower().split()
         shown = [e for e in plan.entries if self._matches(e, words)]
@@ -128,20 +127,22 @@ class PlanSection(Section):
             check = blocked.get(it.rel_path.strip("/").lower())
             note = " · ".join(p for p in (f"BLOCKED: {check}" if check else "", e.reason,
                                           f"route {e.route}" if e.route else "") if p)
-            table.add_row(theme.glyph_word(ACTION_LABEL.get(e.action, e.action), color, theme.BLOCK),
+            table.add_row(theme.glyph_word(ACTION_LABEL.get(e.action, e.action), color),
                           Text(it.rel_path + ("/" if it.is_folder else ""), style=FG, no_wrap=True,
                                overflow="ellipsis"),
                           Text("" if it.is_folder else theme.size(it.size), justify="right", style=FG),
                           Text(f"{it.modified:%Y-%m-%d %H:%M}" if it.modified else "", style=SUB),
                           Text(note, style=SUB, no_wrap=True, overflow="ellipsis"))
         files = [e for e in shown if not e.item.is_folder]
-        tot = Text()
-        tot.append("Σ ", style=f"bold {MAUVE}").append(f"{len(shown):,}", style=f"bold {FG}")
-        tot.append(" entries · ", style=SUB).append(f"{len(files):,}", style=f"bold {FG}").append(" files · ", style=SUB)
-        tot.append(theme.size(sum(e.item.size for e in files)), style=f"bold {FG}")
-        tot.append(" · to copy ", style=SUB).append(theme.size(plan.bytes_to_copy()), style=f"bold {theme.GREEN}")
+        tot = Text(no_wrap=True, overflow="ellipsis")
+        tot.append(f"{len(shown):,}", style=f"bold {FG}").append(" entries", style=SUB)
+        tot.append("   ").append(f"{len(files):,}", style=f"bold {FG}").append(" files", style=SUB)
+        tot.append("   ").append(theme.size(sum(e.item.size for e in files)), style=f"bold {FG}")
+        tot.append(" total", style=SUB)
+        tot.append("   ").append(theme.size(plan.bytes_to_copy()), style=f"bold {theme.GREEN}")
+        tot.append(" to copy", style=SUB)
         if len(shown) > MAX_ROWS:
-            tot.append(f" · first {MAX_ROWS:,} rows shown (see plan.json)", style=theme.YELLOW)
+            tot.append(f"   first {MAX_ROWS:,} rows shown (see plan.json)", style=theme.YELLOW)
         self.query_one("#plan-totals", Static).update(tot)
 
     def action_cycle_filter(self) -> None:

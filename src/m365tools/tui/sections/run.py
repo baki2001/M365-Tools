@@ -17,8 +17,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
-from rich import box
-from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from textual import work
@@ -44,21 +42,29 @@ from m365tools.tools.spmig.models import RunSummary
 
 from .. import theme
 from ..modals import Choice, ConfirmModal, PickerModal, TypedConfirmModal
-from ..theme import BLUE, DIM, FG, GREEN, MAUVE, RED, SUB, SURFACE1, YELLOW
+from ..theme import ACCENT, BLUE, DIM, FG, GREEN, RED, SUB, SURFACE1, YELLOW
 from ..widgets import VimLog
 from .base import Section
 
-STEP_COLOR = {"folder": theme.TEAL, "download": BLUE, "upload": MAUVE, "metadata": theme.TEAL, "verify": GREEN}
+STEP_COLOR = {"folder": theme.CYAN, "download": BLUE, "upload": theme.PURPLE, "metadata": theme.CYAN, "verify": GREEN}
 TRANSFER_PHASES = ("folders", "files", "finalize")
 
 
-def tile(label: str, value: str, style: str = FG) -> Panel:
-    """A stat tile: small label in subtext, big value in bold, in a rounded box."""
-    return Panel(Text.assemble((label, SUB), "\n", (value, f"bold {style}")), box=box.ROUNDED,
-                 border_style=SURFACE1, padding=(0, 1))
+def stat_grid(cells: list[tuple[str, str, str]], columns: int = 4) -> Table:
+    """Stats as aligned ``label  value`` pairs, ``columns`` per row: label secondary, value bold."""
+    grid = Table.grid(expand=True, padding=(0, 2, 0, 0))
+    for _ in range(columns):
+        grid.add_column(no_wrap=True, style=SUB)
+        grid.add_column(no_wrap=True, ratio=1)
+    for i in range(0, len(cells), columns):
+        row: list[Text | str] = []
+        for label, value, style in cells[i:i + columns]:
+            row += [label, Text(value, style=f"bold {style}" if value != "–" else DIM)]
+        grid.add_row(*row)
+    return grid
 
 
-def state_line(word: str, color: str, detail: str = "", *, fg: str = theme.CRUST) -> Text:
+def state_line(word: str, color: str, detail: str = "", *, fg: str = theme.ON_FILL) -> Text:
     """``[ migrating ]  auditing both sides first``: a state pill, then the detail in subtext."""
     t = theme.pill(word, color, fg=fg)
     if detail:
@@ -184,7 +190,7 @@ class RunSection(Section):
         return t
 
     async def _ask_force(self, n: int) -> bool:
-        body = Text.assemble((f"The audit found {n} blocking finding(s).", f"bold {RED}"),
+        body = Text.assemble((f"The audit found {theme.plural(n, 'blocking finding')}.", f"bold {RED}"),
                              (("\nSee section 2 (Checks) for what and how to fix. "
                                "Migrating anyway can fail files or lose data."), FG))
         return bool(await self.m365.push_screen_wait(TypedConfirmModal("Blocking findings", body, "force")))
@@ -204,6 +210,7 @@ class RunSection(Section):
         self.status, self.summary = theme.RUNNING, "starting"
         self._state(state_line("◐ migrating", YELLOW, "auditing both sides first"))
         self.refresh_bindings()
+        self._redraw_stats()
         try:
             summary: RunSummary = await job.migrate(resume_run_dir=resume_run_dir, force=force)
         except asyncio.CancelledError:
@@ -372,7 +379,7 @@ class RunSection(Section):
             self._now(Text.assemble(theme.pill("start", BLUE), "  ", (f"{ev.index:,}/{ev.total:,}  ", SUB),
                                     (ev.rel_path, FG), (f"  {theme.size(ev.size)}", SUB)))
         elif isinstance(ev, ItemStep):
-            self._now(Text.assemble(theme.pill(ev.step, STEP_COLOR.get(ev.step, MAUVE)), "  ", (ev.rel_path, FG)))
+            self._now(Text.assemble(theme.pill(ev.step, STEP_COLOR.get(ev.step, ACCENT)), "  ", (ev.rel_path, FG)))
         elif isinstance(ev, Throttled):
             self._throttle_until = time.monotonic() + ev.seconds
             banner = self.query_one("#throttle", Static)
@@ -412,13 +419,8 @@ class RunSection(Section):
             ("warnings", f"{s.warnings:,}" if s else "–", YELLOW if s and s.warnings else FG),
             ("workers", str(self.m365.opts.workers), FG),
         ]
-        grid = Table.grid(expand=True, padding=(0, 1))
-        for _ in range(4):
-            grid.add_column(ratio=1)
-        grid.add_row(*[tile(*c) for c in cells[:4]])
-        grid.add_row("", "", "", "")  # boxes never touch
-        grid.add_row(*[tile(*c) for c in cells[4:]])
-        self.query_one("#run-stats", Static).update(grid)
+        self.query_one("#run-stats", Static).update(stat_grid(cells))
+        self.query_one("#dash").display = s is not None or self.running
 
     def _state(self, text: Text) -> None:
         self.query_one("#run-state", Static).update(text)

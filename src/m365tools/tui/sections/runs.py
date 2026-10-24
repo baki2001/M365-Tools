@@ -27,7 +27,7 @@ from m365tools.tools.spmig.plan import plan_from_json
 
 from .. import theme
 from ..modals import TextModal
-from ..theme import FG, MODE_STYLE, SUB
+from ..theme import DIM, FG, MODE_STYLE, SUB
 from ..widgets import VimTable
 from .base import Empty, Section
 
@@ -104,7 +104,7 @@ def summarise_run(run: Path, mode: str) -> str:
     if mode == "lock" and (run / "lock.csv").exists():
         c = _csv_column(run / "lock.csv", "status")
         changed = sum(n for k, n in c.items() if not k.startswith("skipped"))
-        return f"{changed} principal(s) to Read" + (" (applied)" if c["applied"] else " (preview)")
+        return f"{theme.plural(changed, 'principal')} to Read" + (" (applied)" if c["applied"] else " (preview)")
     return "no results (interrupted?)" if not (run / "report.txt").exists() else ""
 
 
@@ -205,9 +205,10 @@ class RunsSection(Section):
         self.query_one(VimTable).display = bool(self.runs)
         self.query_one("#runs-empty").display = not self.runs
         self.query_one("#runs-head", Static).update(Text.assemble(
-            theme.pill(f"{len(self.runs)} run(s)", theme.BLUE), ("  in ", SUB), (str(runs_dir()), FG)))
+            (f"{len(self.runs):,}", f"bold {FG}"), (" run" if len(self.runs) == 1 else " runs", SUB),
+            ("   in ", DIM), (str(runs_dir()), SUB), no_wrap=True, overflow="ellipsis"))
         self.status = theme.DONE if self.runs else theme.TODO
-        self.summary = f"{len(self.runs)} run(s)" if self.runs else ""
+        self.summary = theme.plural(len(self.runs), "run") if self.runs else ""
 
     def _current(self) -> RunInfo | None:
         row = self.query_one(VimTable).cursor_row

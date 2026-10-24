@@ -221,6 +221,10 @@ uv run python scripts/smoke_real_tenant.py --tenant contoso --site https://conto
 
 - All options: `m365 spmig migrate --help`. Useful ones are `--exclude "Archive/**"`,
   `--overwrite always|never`, `--workers 4`, `--no-metadata` and `--json` for scripting.
+- `ctrl+t` (or `:` and then Theme) picks a colour theme: Catppuccin (Mocha, Macchiato, Frappé, Latte),
+  Dracula, Gruvbox dark or light, Nord, Tokyo Night, One Dark, Solarized dark or light, Rosé Pine, Kanagawa,
+  Everforest, or Terminal colours, which uses your terminal's own palette. The screen changes as you move
+  through the list. Enter keeps the theme and saves it in the config file, esc puts the old one back.
 - Run folders are in `~/.local/share/m365tools/runs/`, config is in `~/.config/m365tools/config.toml`,
   and the login cache is in `~/.cache/m365tools/`.
 - Exit codes: 0 ok, 1 failures or blocking findings, 2 migrate refused, 130 stopped by Ctrl+C.

@@ -23,7 +23,7 @@ from textual.app import App
 from textual.binding import Binding, BindingType
 from textual.message import Message
 
-from m365tools.core.config import AppConfig, load_config, profile_to_job_options
+from m365tools.core.config import AppConfig, load_config, profile_to_job_options, save_config
 from m365tools.core.events import AuthPrompt, LogLine, ProgressEvent, Throttled
 from m365tools.services import TenantClients, make_gateway_factory, make_groups_job, make_run_dir_factory
 from m365tools.tools.spmig.job import Job
@@ -34,7 +34,7 @@ from .groups import GroupsScreen
 from .home import HomeScreen
 from .modals import AuthModal, Choice, ConfirmModal, PickerModal
 from .onboard import OnboardScreen
-from .theme import THEME, THEME_VARIABLES
+from .theme import DEFAULT_THEME, PALETTES, THEME_VARIABLES, THEMES, PaletteFilter, swatch
 from .workspace import Workspace
 
 
@@ -55,7 +55,10 @@ class M365App(App[None]):
     TITLE = "m365 toolbox"
     CSS_PATH = "app.tcss"
     COMMANDS: ClassVar[set[Any]] = {M365Commands}
-    BINDINGS: ClassVar[list[BindingType]] = [Binding("ctrl+q", "quit_app", "quit", show=False, priority=True)]
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("ctrl+q", "quit_app", "quit", show=False, priority=True),
+        Binding("ctrl+t", "pick_theme", "theme", show=False),
+    ]
     MODES: ClassVar[dict[str, Any]] = {"home": HomeScreen, "spmig": Workspace, "groups": GroupsScreen,
                                      "onboard": OnboardScreen}
     TOOLS: ClassVar[tuple[str, ...]] = ("spmig", "groups", "onboard")
@@ -87,14 +90,25 @@ class M365App(App[None]):
         self.busy_tool: str | None = None
         self._listener: Any = None
         self._auth_modal: AuthModal | None = None
+        self._palette_filter = PaletteFilter(PALETTES[DEFAULT_THEME])
 
     def get_theme_variable_defaults(self) -> dict[str, str]:
-        """The palette tokens ($mauve, $surface1 ...) exist before the theme is applied, so app.tcss parses."""
+        """The palette roles ($accent, $surface1 ...) exist before the theme is applied, so app.tcss parses."""
         return {**super().get_theme_variable_defaults(), **THEME_VARIABLES}
 
+    def get_line_filters(self) -> list[Any]:
+        """The palette filter runs first: it turns role colours into theme colours before Textual's own filters
+        (ANSI to truecolor, NO_COLOR) see them."""
+        return [self._palette_filter, *super().get_line_filters()]
+
+    def watch_theme(self, name: str) -> None:
+        if name in PALETTES:
+            self._palette_filter = PaletteFilter(PALETTES[name])
+
     def on_mount(self) -> None:
-        self.register_theme(THEME)
-        self.theme = THEME.name
+        for t in THEMES:
+            self.register_theme(t)
+        self.theme = self.cfg.ui.theme if self.cfg.ui.theme in PALETTES else DEFAULT_THEME
         self.switch_mode(self.start)
         self.refresh_account()
 
@@ -373,6 +387,36 @@ class M365App(App[None]):
         self.tenant, self.account = tenant, ", ".join(accounts)
         self.refresh_header()
         self.notify(f"Signed in to {tenant} as {self.account or '?'}")
+
+    @work(group="theme", exclusive=True, exit_on_error=False)
+    async def action_pick_theme(self) -> None:
+        """ctrl+t: pick a colour theme. Moving through the list previews it; enter keeps it and saves it to the
+        config file, esc puts the old one back."""
+        if getattr(self.screen, "is_theme_picker", False):
+            return
+        before = self.theme
+        choices = [Choice(p.label, name, "your terminal's palette" if p.ansi else ("dark" if p.dark else "light"),
+                          swatch(p)) for name, p in PALETTES.items()]
+        picker = PickerModal("Theme", choices, highlight=before, on_highlight=self._preview_theme)
+        picker.is_theme_picker = True  # type: ignore[attr-defined]
+        name = await self.push_screen_wait(picker)
+        if name is None:
+            self.theme = before
+            return
+        self.theme = name
+        if self.cfg.ui.theme == name:
+            return
+        self.cfg.ui.theme = name
+        try:
+            save_config(self.cfg)
+        except Exception as exc:  # noqa: BLE001 - shown to the user; the theme still applies for this session
+            self.report_error(exc, "save theme")
+            return
+        self.notify(f"Theme: {PALETTES[name].label}")
+
+    def _preview_theme(self, name: Any) -> None:
+        if name in PALETTES:
+            self.theme = name
 
     def action_open_runs_dir(self) -> None:
         from m365tools.core.paths import runs_dir

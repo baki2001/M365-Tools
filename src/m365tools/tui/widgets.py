@@ -30,7 +30,7 @@ from m365tools.core.events import (
 from m365tools.core.report.format import fmt_elapsed
 
 from . import theme
-from .theme import CRUST, DIM, FG, GLYPH, GLYPH_STYLE, KEY, MAUVE, SPINNER, SUB, YELLOW
+from .theme import ACCENT, DIM, FG, GLYPH, GLYPH_STYLE, KEY, ON_FILL, SPINNER, SUB, YELLOW
 
 if TYPE_CHECKING:
     from .app import M365App
@@ -170,6 +170,12 @@ class VimLog(RichLog):
     def __init__(self, *, id: str | None = None, max_lines: int = 200) -> None:
         super().__init__(id=id, max_lines=max_lines, wrap=True, markup=False, highlight=False, auto_scroll=True)
 
+    def write(self, content: Any, width: int | None = None, expand: bool = True, shrink: bool = True,
+              scroll_end: bool | None = None, animate: bool = False) -> VimLog:
+        """Lines use the full width, so wrapped messages break at the box edge (``expand`` defaults to True)."""
+        super().write(content, width, expand, shrink, scroll_end, animate)
+        return self
+
 
 # ------------------------------------------------------------------------------------------------ chrome
 
@@ -179,8 +185,8 @@ BRAND = "m365 toolbox"
 
 
 class HeaderBar(Widget):
-    """Top line on mantle, the same on every screen: ``◆ m365 toolbox ▸ tool`` | busy pill and tool context |
-    tenant · signed-in account."""
+    """Top line, the same on every screen: ``◆ m365 toolbox`` | busy pill and the tools (the open one
+    marked, the others with their key) | profile, tenant and signed-in account."""
 
     def __init__(self, tool: str = "", *, id: str | None = None) -> None:
         super().__init__(id=id)
@@ -199,23 +205,24 @@ class HeaderBar(Widget):
         grid.add_column(justify="left", no_wrap=True)
         grid.add_column(justify="center", ratio=1, no_wrap=True, overflow="ellipsis")
         grid.add_column(justify="right", no_wrap=True, overflow="ellipsis")
-        left = Text.assemble((f" {MARK} ", f"bold {MAUVE}"), (BRAND, f"bold {FG}"))
-        if self.tool:
-            left.append("  ▸ ", style=DIM).append(self.tool, style=f"bold {MAUVE}")
+        left = Text.assemble((f" {MARK} ", f"bold {ACCENT}"), (BRAND, f"bold {FG}"))
         mid = Text()
-        if not self.tool:
-            mid.append_text(theme.key_hints([(str(i), t) for i, t in enumerate(app.TOOLS, 1)], sep="  "))
         if app.busy:
             mid.append_text(theme.pill(f"◐ {app.busy}", YELLOW)).append("   ")
-        if self.tool:
-            others = [(f"^{i}", t) for i, t in enumerate(app.TOOLS, 1) if t != self.tool]
-            mid.append_text(theme.key_hints(others, sep=" ")).append("   ")
-        if self.tool == "spmig":
-            mid.append("profile ", style=SUB).append(app.opts.profile or "unsaved",
-                                                      style=FG if app.opts.profile else DIM)
+        for i, t in enumerate(app.TOOLS, 1):
+            if i > 1:
+                mid.append("   ")
+            if t == self.tool:
+                mid.append(f"{theme.DOT} ", style=ACCENT).append(t, style=f"bold {FG}")
+            else:
+                mid.append(f"{'^' if self.tool else ''}{i} ", style=KEY).append(t, style=SUB)
         right = Text()
-        right.append("tenant ", style=SUB).append(app.tenant or "none", style=FG if app.tenant else theme.PEACH)
-        right.append(" · ", style=DIM)
+        if self.tool == "spmig":
+            right.append("profile ", style=DIM).append(app.opts.profile or "unsaved",
+                                                      style=FG if app.opts.profile else DIM)
+            right.append("   ")
+        right.append("tenant ", style=DIM).append(app.tenant or "none", style=FG if app.tenant else theme.ORANGE)
+        right.append("   ")
         right.append(app.account or "not signed in", style=FG if app.account else DIM).append(" ")
         grid.add_row(left, mid, right)
         return grid
@@ -298,8 +305,8 @@ def sidebar_entry(number: int, title: str, status: str, summary: str, *, hint: s
     line2 = fit(summary or hint, SIDEBAR_TEXT)
     t = Text()
     if selected:
-        t.append(f"{glyph} ", style=f"bold {CRUST}").append(f"{number}  ", style=CRUST)
-        t.append(title, style=f"bold {CRUST}").append("\n  ").append(line2, style=CRUST)
+        t.append(f"{glyph} ", style=f"bold {ON_FILL}").append(f"{number}  ", style=ON_FILL)
+        t.append(title, style=f"bold {ON_FILL}").append("\n  ").append(line2, style=ON_FILL)
         return t
     t.append(f"{glyph} ", style=GLYPH_STYLE[status]).append(f"{number}  ", style=KEY)
     t.append(title, style=f"bold {FG}").append("\n  ")

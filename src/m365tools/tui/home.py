@@ -25,7 +25,7 @@ from textual.widgets.option_list import Option
 
 from . import theme
 from .modals import TextModal
-from .theme import CRUST, DIM, FG, KEY, MAUVE, SUB
+from .theme import ACCENT, DIM, FG, KEY, ON_FILL, SUB
 from .widgets import BRAND, MARK, BarList, BarOption, HeaderBar, KeyBar
 
 if TYPE_CHECKING:
@@ -102,13 +102,13 @@ def tool_entry(tool: Tool, last: LastRun | None, selected: bool) -> Table:
     grid.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
     grid.add_column(justify="right", no_wrap=True)
     if last is None:
-        run = Text("no runs yet", style=CRUST if selected else DIM)
+        run = Text("no runs yet", style=ON_FILL if selected else DIM)
     else:
-        run = Text.assemble(("last ", CRUST if selected else DIM), (last.mode, CRUST if selected else FG),
-                            (f" · {ago(last.started)}", CRUST if selected else SUB))
+        run = Text.assemble(("last ", ON_FILL if selected else DIM), (last.mode, ON_FILL if selected else FG),
+                            (f" · {ago(last.started)}", ON_FILL if selected else SUB))
     if selected:
-        grid.add_row(Text(f" {tool.number}", style=f"bold {CRUST}"), Text(tool.key, style=f"bold {CRUST}"),
-                     Text(tool.title, style=CRUST), run)
+        grid.add_row(Text(f" {tool.number}", style=f"bold {ON_FILL}"), Text(tool.key, style=f"bold {ON_FILL}"),
+                     Text(tool.title, style=ON_FILL), run)
     else:
         grid.add_row(Text(f" {tool.number}", style=f"bold {KEY}"), Text(tool.key, style=f"bold {FG}"),
                      Text(tool.title, style=SUB), run)
@@ -117,8 +117,8 @@ def tool_entry(tool: Tool, last: LastRun | None, selected: bool) -> Table:
 
 def mark() -> Table:
     """The mark (a diamond in a frame) beside the name and the tagline."""
-    logo = Text.assemble(("╭───╮\n", MAUVE), ("│ ", MAUVE), (MARK, f"bold {theme.LAVENDER}"), (" │\n", MAUVE),
-                         ("╰───╯", MAUVE))
+    logo = Text.assemble(("╭───╮\n", ACCENT), ("│ ", ACCENT), (MARK, f"bold {theme.ACCENT}"), (" │\n", ACCENT),
+                         ("╰───╯", ACCENT))
     words = Text.assemble((BRAND, f"bold {FG}"), "\n", ("tools for Microsoft 365 admins", SUB), "\n",
                           ("spmig · groups · onboard", DIM))
     grid = Table.grid(padding=(0, 2))
@@ -196,7 +196,7 @@ class HomeScreen(Screen[None]):
             if len(app.cfg.tenants) > 1:
                 t.append("  ").append_text(theme.key_hint("t", "switch"))
         else:
-            t.append("no tenant yet: run ", style=theme.PEACH).append("m365 tenant add NAME", style=f"bold {FG}")
+            t.append("no tenant yet: run ", style=theme.ORANGE).append("m365 tenant add NAME", style=f"bold {FG}")
         self.query_one("#home-foot", Static).update(t)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:

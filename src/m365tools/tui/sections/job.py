@@ -23,7 +23,7 @@ from m365tools.tools.spmig.models import Endpoint, JobOptions
 
 from .. import theme
 from ..modals import Choice, OptionsModal, PickerModal, PromptModal
-from ..theme import DIM, FG, KEY, MODE_STYLE, PEACH, STATE_COLOR, SUB, SURFACE0
+from ..theme import DIM, FG, GLYPH, MODE_STYLE, ORANGE, STATE_COLOR, SUB
 from .base import Section
 from .runs import RunInfo, list_all_runs
 
@@ -44,7 +44,7 @@ def _pairs(pairs: list[tuple[str, str]], value_style: str = FG) -> Text:
 def endpoint_text(ep: Endpoint, facts: str) -> Text:
     """Line 1: site name (bold) and URL. Line 2: tenant · library · folder · inventory facts when known."""
     if not ep.site_url:
-        t = Text("not set", style=f"bold {PEACH}")
+        t = Text("not set", style=f"bold {ORANGE}")
         t.append("\n").append_text(theme.key_hint("e", "choose tenant, site, library and folder"))
         return t
     t = Text()
@@ -52,18 +52,18 @@ def endpoint_text(ep: Endpoint, facts: str) -> Text:
     t.append("\n").append_text(_pairs([("tenant", ep.tenant), ("library", ep.library or DEFAULT_LIBRARY_LABEL),
                                        ("folder", ep.folder or "library root")]))
     if facts:
-        t.append(" · ", style=DIM).append(facts, style=theme.TEAL)
+        t.append(" · ", style=DIM).append(facts, style=theme.CYAN)
     return t
 
 
 def options_text(o: JobOptions) -> Text:
     t = _pairs([("overwrite", o.overwrite), ("metadata", "on" if o.restore_metadata else "off"),
-                ("workers", str(o.workers)), ("lock after", "on" if o.lock_source_after else "off")], KEY)
+                ("workers", str(o.workers)), ("lock after", "on" if o.lock_source_after else "off")])
     t.append("\n").append_text(_pairs([("excludes", ", ".join(o.excludes) or "none"),
-                                       ("user map", str(o.usermap_path) if o.usermap_path else "none")], KEY))
+                                       ("user map", str(o.usermap_path) if o.usermap_path else "none")]))
     for r in o.routes:
-        t.append("\nroute ", style=SUB).append(r.prefix, style=KEY).append("  →  ", style=DIM)
-        t.append(r.destination.describe(), style=KEY)
+        t.append("\nroute ", style=SUB).append(r.prefix, style=FG).append("  →  ", style=DIM)
+        t.append(r.destination.describe(), style=FG)
     return t
 
 
@@ -71,7 +71,6 @@ def options_text(o: JobOptions) -> Text:
 
 STEPS = (("job", "Job"), ("checks", "Checks"), ("plan", "Plan"), ("run", "Run"), ("verify", "Verify"),
          ("lock", "Lock"))
-NUMERALS = "①②③④⑤⑥"
 DONE_WORD = {"job": "ready", "checks": "clear", "plan": "planned", "run": "done", "verify": "ok", "lock": "locked"}
 FAILED_WORD = {"checks": "blocked", "verify": "problems"}
 
@@ -87,24 +86,23 @@ def step_word(key: str, status: str, summary: str) -> str:
 
 
 def pipeline(states: dict[str, tuple[str, str]], width: int) -> Table:
-    """``① Job → ② Checks → ...`` as pills coloured by state, with a one-word status under each."""
-    arrow = " → " if width >= 70 else "›"
+    """``● 1 Job ── ✗ 2 Checks ── ○ 3 Plan ...``: the sidebar's state glyphs, with a one-word status under each."""
+    link = " ── " if width >= 76 else " "
     grid = Table.grid(padding=0)
-    chips: list[Text] = []
+    steps: list[Text] = []
     words: list[Text] = []
     for i, (key, title) in enumerate(STEPS):
         status, summary = states.get(key, (theme.TODO, ""))
         color = STATE_COLOR[status]
         if i:
             grid.add_column(no_wrap=True)
-            chips.append(Text(arrow, style=DIM))
+            steps.append(Text(link, style=DIM))
             words.append(Text(""))
-        grid.add_column(no_wrap=True, justify="center")
-        label = f"{NUMERALS[i]} {title}"
-        chips.append(theme.pill(label, color) if status != theme.TODO else
-                     theme.pill(label, SURFACE0, fg=SUB, bold=False))
-        words.append(Text(step_word(key, status, summary), style=color if status != theme.TODO else DIM))
-    grid.add_row(*chips)
+        grid.add_column(no_wrap=True)
+        steps.append(Text.assemble((f"{GLYPH[status]} ", color), (f"{i + 1} ", theme.KEY),
+                                   (title, f"bold {FG}" if status != theme.TODO else SUB)))
+        words.append(Text(f"  {step_word(key, status, summary)}", style=color if status != theme.TODO else DIM))
+    grid.add_row(*steps)
     grid.add_row(*words)
     return grid
 
@@ -202,7 +200,7 @@ class JobSection(Section):
         self.query_one("#card-options", Card).update(options_text(o))
         if not app.cfg.tenants:
             cmd = "quit and run: m365 tenant add <name> --tenant-id ... --client-id ... --host <tenant>.sharepoint.com"
-            hint = Text.assemble(theme.pill("no tenants", PEACH), "  ", (cmd, SUB))
+            hint = Text.assemble(theme.pill("no tenants", ORANGE), "  ", (cmd, SUB))
         elif not app.endpoints_ready():
             hint = Text.assemble(("next  ", SUB), theme.key_hints(
                 [("e", "edit the focused card"), ("p", "load a profile"), ("o", "options")]))

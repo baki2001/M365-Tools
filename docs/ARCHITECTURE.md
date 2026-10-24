@@ -328,6 +328,17 @@ routes      = [{ prefix="0. Archief", destination={ tenant="contoso", site_url="
 Optional profile keys: `overwrite` (`skip_if_same_or_newer` | `always` | `never`), `restore_metadata`,
 `lock_source_after`, `workers` (1-16), `usermap_path`. Unknown keys are rejected.
 
+The TUI theme lives in its own table, `[ui]` with `theme = "nord"` (any key of `PALETTES` in
+`tui/theme.py`). The table is only written once you pick something other than the default, and an unknown
+name falls back to Catppuccin Mocha.
+
+How the TUI colours work: a theme is a `Palette` of sixteen roles (backgrounds, text levels, accent and six
+hues). Each palette is registered as a Textual theme, so `app.tcss` uses role variables (`$accent`,
+`$surface1`, `$fg-sub` ...). Python code that builds Rich text uses the role constants in `tui/theme.py`
+(`ACCENT`, `RED`, `SUB` ...). Those are placeholder colours, and `PaletteFilter`, a Textual line filter,
+swaps them for the active palette when lines are painted. Switching themes therefore recolours everything
+on screen without rebuilding any widget. Never put a literal colour in TUI code; use a role.
+
 ## Lessons baked in (from the Servicemanagement migration, Oct 2026)
 
 - Default library name is language-dependent ("Gedeelde documenten"); always resolve via DefaultDocumentLibrary.

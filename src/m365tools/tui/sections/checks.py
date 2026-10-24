@@ -116,10 +116,9 @@ class ChecksSection(Section):
         self.shown = [f for f in self.findings
                       if all(w in f"{f.severity} {f.category} {f.path} {f.detail}".lower() for w in words)]
         counts = {str(s): sum(1 for f in self.findings if f.severity == s) for s in SEVERITY_ORDER}
-        line = theme.counts_line(counts, SEVERITY_STYLE)
+        line = theme.facets(theme.counts_line(counts, SEVERITY_STYLE), [("/", self.filter_text)])
         if self.filter_text:
-            line.append(" filter ", style=SUB).append(self.filter_text, style=f"bold {theme.MAUVE}")
-            line.append(f" · {len(self.shown)} shown", style=SUB)
+            line.append(f"   {len(self.shown):,} shown", style=SUB)
         self.query_one("#checks-counts", Static).update(line)
         table = self.query_one(VimTable)
         table.clear()

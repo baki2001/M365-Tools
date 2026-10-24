@@ -29,7 +29,7 @@ from .groups_view import FINDING_LABEL, change_status, group_rows, people_rows, 
 from .home import ago
 from .modals import Choice, PickerModal, PromptModal, TextModal, TypedConfirmModal
 from .sections.base import Empty
-from .theme import BLUE, CRUST, DIM, FG, GREEN, MAUVE, PEACH, RED, SEVERITY_STYLE, SUB, YELLOW
+from .theme import ACCENT, BLUE, DIM, FG, GREEN, ON_FILL, ORANGE, RED, SEVERITY_STYLE, SUB, YELLOW
 from .widgets import Activity, BarList, BarOption, HeaderBar, KeyBar, StepList, VimLog, VimTable
 from .workspace import BACK_HELP
 
@@ -198,7 +198,7 @@ class OnboardScreen(GroupsOpsScreen):
     def _render_state(self) -> None:
         job = self.job
         if self.error:
-            self.query_one("#gstate", Static).update(Text(self.error, style=PEACH))
+            self.query_one("#gstate", Static).update(Text(self.error, style=ORANGE))
             return
         findings = drift_mod.findings(self.snap, self.registry) if self.snap is not None else []
         self.query_one("#gstate", Static).update(state_ribbon(
@@ -346,7 +346,7 @@ class OnboardScreen(GroupsOpsScreen):
         todo = [c for c in plan.changes if c.status == "planned"]
         pending = None
         if todo:
-            pending = ("apply", f"Add {upn} to {len(todo)} group(s)?",
+            pending = ("apply", f"Add {upn} to {theme.plural(len(todo), 'group')}?",
                        lambda job: job.onboard(upn, apply=True, **kwargs),
                        lambda p: self._show_onboard(p, done=True))
         self._show_onboard(plan, pending=pending)
@@ -355,7 +355,7 @@ class OnboardScreen(GroupsOpsScreen):
         rows = _member_rows(plan, "add member", self.registry)
         manual = Text()
         for m in plan.manual:
-            manual.append("○ ", style=PEACH).append(f"{m}\n", style=FG)
+            manual.append("○ ", style=ORANGE).append(f"{m}\n", style=FG)
         if not plan.manual:
             manual.append("nothing: groups cover it all", style=DIM)
         entry = _entry_text(plan.upn, [("bundles", plan.bundles), ("addons", plan.addons)])
@@ -376,7 +376,7 @@ class OnboardScreen(GroupsOpsScreen):
         todo = [c for c in plan.changes if c.status == "planned"]
         pending = None
         if todo:
-            pending = ("offboard", f"Remove {upn} from {len(todo)} group(s) and mark them offboarded?",
+            pending = ("offboard", f"Remove {upn} from {theme.plural(len(todo), 'group')} and mark them offboarded?",
                        lambda job: job.offboard(upn, apply=True), lambda p: self._show_offboard(p, done=True))
         self._show_offboard(plan, pending=pending)
 
@@ -454,7 +454,7 @@ class OnboardScreen(GroupsOpsScreen):
         self.findings = sorted(findings or [], key=lambda f: (SEV_ORDER.get(str(f.severity), 9), f.category))
         head = Text.assemble((f"Check {upn}", f"bold {FG}"), ("   ", ""))
         if self.findings:
-            head.append_text(theme.pill(f"{len(self.findings)} finding(s)", YELLOW))
+            head.append_text(theme.pill(theme.plural(len(self.findings), "finding"), YELLOW))
         else:
             head.append("● matches the registry", style=GREEN)
         self.query_one("#ocheck-head", Static).update(head)
@@ -502,7 +502,7 @@ class OnboardScreen(GroupsOpsScreen):
 
 def _entry_text(upn: str, fields: list[tuple[str, Any]]) -> Text:
     t = Text(no_wrap=True, overflow="ellipsis")
-    t.append("[people.", style=DIM).append(f'"{upn}"', style=MAUVE).append("]\n", style=DIM)
+    t.append("[people.", style=DIM).append(f'"{upn}"', style=ACCENT).append("]\n", style=DIM)
     for k, v in fields:
         value = "[" + ", ".join(f'"{x}"' for x in v) + "]" if isinstance(v, list) else f'"{v}"'
         t.append(f"{k} = ", style=SUB).append(f"{value}\n", style=FG)
@@ -518,8 +518,8 @@ def _run_maker(run: Path) -> Callable[[bool], Text]:
     def make(selected: bool) -> Text:
         t = Text(no_wrap=True, overflow="ellipsis")
         if selected:
-            return t.append(f"{mode:<9}{upn}\n  {state} · {when}", style=CRUST)
-        t.append(f"{mode:<9}", style=GREEN if mode == "onboard" else PEACH).append(upn, style=FG)
+            return t.append(f"{mode:<9}{upn}\n  {state} · {when}", style=ON_FILL)
+        t.append(f"{mode:<9}", style=GREEN if mode == "onboard" else ORANGE).append(upn, style=FG)
         return t.append(f"\n  {state} · {when}", style=SUB if state == "applied" else DIM)
 
     return make

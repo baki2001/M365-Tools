@@ -14,7 +14,7 @@ from m365tools.tools.spmig.lock import LockChange
 
 from .. import theme
 from ..modals import TypedConfirmModal
-from ..theme import DIM, FG, GREEN, SUB, SURFACE1, YELLOW
+from ..theme import DIM, FG, GREEN, SUB, YELLOW
 from ..widgets import Activity, VimTable
 from .base import Empty, Section
 
@@ -66,7 +66,7 @@ class LockSection(Section):
         if not todo:
             app.notify("Nothing to lock: preview first (l), or nobody can write.", severity="warning")
             return
-        body = Text.assemble((f"{len(todo)} principal(s) on the SOURCE library will be set to Read:\n", FG),
+        body = Text.assemble((f"{theme.plural(len(todo), 'principal')} on the SOURCE library will be set to Read:\n", FG),
                              ("\n".join(f"  {c.title}" for c in todo[:12]), FG),
                              ("\n  ..." if len(todo) > 12 else "", DIM),
                              ("\n\nUsers keep read access. Undo needs a site owner.", DIM))
@@ -98,12 +98,14 @@ class LockSection(Section):
             return
         n = sum(1 for c in self.changes if c.will_change)
         head = theme.counts_line({"downgrade": n, "untouched": len(self.changes) - n},
-                                 {"downgrade": YELLOW, "untouched": SURFACE1},
+                                 {"downgrade": YELLOW, "untouched": SUB},
                                  {"downgrade": "to downgrade", "untouched": "left untouched"})
+        head.append("\n")
         if self.applied:
-            head.append_text(theme.pill("● applied", GREEN))
+            head.append_text(theme.notice(GREEN, ("applied", f"bold {GREEN}"), " · these principals now have Read"))
         else:
-            head.append("preview only · ", style=SUB).append_text(theme.key_hint("A", "applies"))
+            head.append_text(theme.notice(YELLOW, ("preview only", f"bold {YELLOW}"), " · nothing changed yet · ",
+                                          ("A", f"bold {theme.KEY}"), " applies after you type 'lock'"))
         self.query_one("#lock-counts", Static).update(head)
         table = self.query_one(VimTable)
         table.clear()

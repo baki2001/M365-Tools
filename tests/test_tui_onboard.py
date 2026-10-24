@@ -23,7 +23,7 @@ async def test_home_opens_onboard_and_g_returns(tmp_path):
         await pilot.press("3")
         await pilot.pause()
         assert isinstance(app.screen, OnboardScreen)
-        assert "▸ onboard" in rendered(app.screen.query_one("#header").render())
+        assert "● onboard" in rendered(app.screen.query_one("#header").render())
         await pilot.press("g")
         await pilot.pause()
         assert isinstance(app.screen, HomeScreen)

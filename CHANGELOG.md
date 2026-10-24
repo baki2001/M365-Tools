@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Colour themes: `ctrl+t` (also in the `:` palette) opens a picker with 16 themes, previewed live as you
+  move: Catppuccin Mocha, Macchiato, Frappé and Latte, Dracula, Gruvbox dark and light, Nord, Tokyo Night,
+  One Dark, Solarized dark and light, Rosé Pine, Kanagawa, Everforest, and Terminal colours (the terminal's
+  own ANSI palette). The choice is saved as `[ui] theme` in config.toml.
+- Calmer, more consistent layout. Counts read the same on every screen (`● 3 blocking   ● 1 warn`, zeros
+  dimmed) instead of filled pills; active filters sit at the end of that row. Table headers no longer have a
+  filled band, and Plan rows lost the `▮` marker. The thick coloured bar down the left of the main pane is
+  gone: the cursor and box borders show focus. The idle Run page shows the state and the log instead of eight
+  empty stat boxes; during a migration the stats are a compact grid. Plan's blocking warning is one line.
+  The Job pipeline uses the sidebar's state glyphs. The header lists all three tools with the open one
+  marked. Log lines wrap under the message, not under the time. Counts use proper plurals ("1 run",
+  "2 runs") instead of "run(s)".
 - spmig Runs (`7`): Enter loads a run back into the workspace. The job gets the source, destination and options
   the run used, Checks gets the audit findings and Plan gets the dry run, so you can continue to migrate after
   restarting the TUI. Loading an audit also brings the newest dry run with the same job, and the other way
