@@ -225,6 +225,8 @@ uv run python scripts/smoke_real_tenant.py --tenant contoso --site https://conto
   Dracula, Gruvbox dark or light, Nord, Tokyo Night, One Dark, Solarized dark or light, Rosé Pine, Kanagawa,
   Everforest, or Terminal colours, which uses your terminal's own palette. The screen changes as you move
   through the list. Enter keeps the theme and saves it in the config file, esc puts the old one back.
+  Themes need a terminal with 24-bit colour. Windows Terminal (also under WSL) is detected on its own; for
+  another terminal where backgrounds come out black, run `export COLORTERM=truecolor` first.
 - Run folders are in `~/.local/share/m365tools/runs/`, config is in `~/.config/m365tools/config.toml`,
   and the login cache is in `~/.cache/m365tools/`.
 - Exit codes: 0 ok, 1 failures or blocking findings, 2 migrate refused, 130 stopped by Ctrl+C.

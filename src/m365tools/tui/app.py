@@ -14,7 +14,7 @@ How an operation flows (e.g. audit):
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -45,6 +45,14 @@ class JobEvent(Message):
         super().__init__()
         self.event = event
         self.listener = listener  # the section whose operation emitted it (captured when posted)
+
+
+def detect_truecolor(env: MutableMapping[str, str]) -> None:
+    """Windows Terminal draws 24-bit colour but does not set ``COLORTERM``, and WSL passes on only
+    ``WT_SESSION``. Without ``COLORTERM`` Rich falls back to 256 colours, which turns every theme background
+    black. Call before the app is created."""
+    if not env.get("COLORTERM") and env.get("WT_SESSION"):
+        env["COLORTERM"] = "truecolor"
 
 
 def blank_options() -> JobOptions:

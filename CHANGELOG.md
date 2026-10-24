@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Windows Terminal and WSL: themes now get 24-bit colour. Windows Terminal does not set `COLORTERM`, so
+  the TUI fell back to 256 colours and every background turned black. It now sets `COLORTERM=truecolor` when
+  `WT_SESSION` is present and `COLORTERM` is empty.
 - Colour themes: `ctrl+t` (also in the `:` palette) opens a picker with 16 themes, previewed live as you
   move: Catppuccin Mocha, Macchiato, Frappé and Latte, Dracula, Gruvbox dark and light, Nord, Tokyo Night,
   One Dark, Solarized dark and light, Rosé Pine, Kanagawa, Everforest, and Terminal colours (the terminal's

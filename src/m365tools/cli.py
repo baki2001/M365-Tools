@@ -110,8 +110,9 @@ def _load_cfg(console: Console) -> AppConfig:
 
 
 def launch_tui(start: str = "home") -> None:
-    from m365tools.tui.app import M365App
+    from m365tools.tui.app import M365App, detect_truecolor
 
+    detect_truecolor(os.environ)
     M365App(start=start).run()
 
 
