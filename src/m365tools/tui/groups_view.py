@@ -19,7 +19,7 @@ from m365tools.tools.groups.models import Finding, Registry, Snapshot, norm
 from m365tools.tools.groups.registry import bundles_with
 
 from . import theme
-from .theme import BLUE, CRUST, DIM, FG, GREEN, MAUVE, PEACH, RED, SUB, TEAL, YELLOW
+from .theme import ACCENT, BLUE, CYAN, DIM, FG, GREEN, ON_FILL, ORANGE, RED, SUB, YELLOW
 
 LIST_TEXT = 34  # list width minus padding and scrollbar
 
@@ -30,15 +30,15 @@ STATE = {
     "ok": ("●", GREEN, "ok"),
     "drift": ("▲", YELLOW, "drift"),
     "unassigned": ("○", SUB, "not in the registry"),
-    "gone": ("◌", PEACH, "not in the tenant"),
+    "gone": ("◌", ORANGE, "not in the tenant"),
     "offboarded": ("⊘", DIM, "offboarded"),
     "unknown": ("·", DIM, "no snapshot"),
     "unregistered": ("▲", YELLOW, "not in the registry"),
-    "not_created": ("○", PEACH, "not created in the tenant"),
+    "not_created": ("○", ORANGE, "not created in the tenant"),
 }
-GROUP_STATUS = {"ok": ("●", GREEN), "missing": ("○", PEACH), "unexplained": ("▲", YELLOW)}
-CHANGE_STYLE = {"planned": BLUE, "already": DIM, "done": GREEN, "failed": RED, "not_created": PEACH,
-                "kept": DIM, "manual": PEACH}
+GROUP_STATUS = {"ok": ("●", GREEN), "missing": ("○", ORANGE), "unexplained": ("▲", YELLOW)}
+CHANGE_STYLE = {"planned": BLUE, "already": DIM, "done": GREEN, "failed": RED, "not_created": ORANGE,
+                "kept": DIM, "manual": ORANGE}
 CHANGE_LABEL = {"already": "already member", "not_created": "group not created"}
 FINDING_LABEL = {"unexplained": "unexplained", "missing": "missing", "unregistered": "unregistered",
                  "not_created": "not created", "unassigned": "unassigned", "no_owner": "no owner",
@@ -96,8 +96,8 @@ class Row:
         pad = max(width - 2 - len(name) - len(hint), 1)
         t = Text(no_wrap=True, overflow="ellipsis")
         if selected:
-            t.append(f"{glyph} ", style=f"bold {CRUST}").append(name, style=f"bold {CRUST}")
-            return t.append(" " * pad).append(hint, style=CRUST)
+            t.append(f"{glyph} ", style=f"bold {ON_FILL}").append(name, style=f"bold {ON_FILL}")
+            return t.append(" " * pad).append(hint, style=ON_FILL)
         t.append(f"{glyph} ", style=color).append(name, style=FG)
         return t.append(" " * pad).append(hint, style=DIM)
 
@@ -190,13 +190,9 @@ def state_ribbon(snap: Snapshot | None, reg: Registry, findings: list[Finding], 
     c = Counter(f.category for f in findings)
     counts = [(len(snap.people), "people", BLUE), (len(snap.groups), "groups", BLUE),
               (c["unregistered"], "unregistered", YELLOW), (c["unexplained"], "unexplained", YELLOW),
-              (c["missing"], "missing", PEACH)]
-    t.append("\n")
-    for i, (n, label, color) in enumerate(counts):
-        if i:
-            t.append(" · ", style=DIM)
-        t.append("● " if n else "○ ", style=color if n else DIM).append(f"{n} ", style=f"bold {FG}" if n else DIM)
-        t.append(label, style=SUB if n else DIM)
+              (c["missing"], "missing", ORANGE)]
+    t.append("\n").append_text(theme.counts_line({label: n for n, label, _c in counts},
+                                                 {label: color for _n, label, color in counts}))
     return t
 
 
@@ -204,7 +200,7 @@ def state_ribbon(snap: Snapshot | None, reg: Registry, findings: list[Finding], 
 
 
 def heading(text: str) -> Text:
-    return Text(text, style=f"bold {MAUVE}")
+    return Text(text, style=f"bold {ACCENT}")
 
 
 def kv(rows: list[tuple[str, RenderableType]]) -> Table:
@@ -222,7 +218,7 @@ def flags(*pairs: tuple[bool, str, str]) -> Text:
     for i, (on, yes, no) in enumerate(pairs):
         if i:
             t.append("   ")
-        t.append("● " if on else "○ ", style=GREEN if on else PEACH).append(yes if on else no, style=SUB)
+        t.append("● " if on else "○ ", style=GREEN if on else ORANGE).append(yes if on else no, style=SUB)
     return t
 
 
@@ -251,7 +247,7 @@ def person_detail(d: dict[str, Any]) -> Group:
         Text(sub, style=SUB),
     ]
     if d["offboarded"]:
-        parts.append(Text(f"offboarded on {d['offboarded']}", style=PEACH))
+        parts.append(Text(f"offboarded on {d['offboarded']}", style=ORANGE))
     if d["note"]:
         parts.append(Text(f"note: {d['note']}", style=SUB))
     parts += [Text(""), kv([("bundles", joined(d["bundles"], f"bold {FG}")), ("add-ons", joined(d["addons"]))])]
@@ -273,7 +269,7 @@ def person_detail(d: dict[str, Any]) -> Group:
     if d["unexplained"] or d["missing"]:
         parts.append(Text(""))
         if d["missing"]:
-            parts.append(Text.assemble(("○ missing  ", PEACH), ("expected by a bundle or add-on but not a member: ",
+            parts.append(Text.assemble(("○ missing  ", ORANGE), ("expected by a bundle or add-on but not a member: ",
                                                                 SUB), ("onboard (3 on home)", f"bold {BLUE}"),
                                        (" re-adds them", SUB)))
         if d["unexplained"]:
@@ -284,7 +280,7 @@ def person_detail(d: dict[str, Any]) -> Group:
     app_text = Text(", ").join(apps) if apps else none()
     parts += [Text(""), heading("ALSO HAS"),
               kv([("licences", joined(d["licences"])), ("apps", app_text),
-                  ("roles", joined(d["roles"], f"bold {PEACH}"))])]
+                  ("roles", joined(d["roles"], f"bold {ORANGE}"))])]
     return Group(*parts)
 
 
@@ -313,7 +309,7 @@ def group_detail(d: dict[str, Any], names: Callable[[str], str]) -> Group:
             if upn in unexplained:
                 why = theme.glyph_word("unexplained", YELLOW, "▲")
             elif upn in addon:
-                why = theme.glyph_word("add-on", TEAL)
+                why = theme.glyph_word("add-on", CYAN)
             else:
                 why = theme.glyph_word("bundle", GREEN)
             g.add_row(why, Text(names(upn), style=FG), Text(upn, style=DIM))
@@ -322,7 +318,7 @@ def group_detail(d: dict[str, Any], names: Callable[[str], str]) -> Group:
         parts.append(none("no direct members"))
     holders = sorted(addon - set(d["members"]))
     if holders:
-        parts += [Text(""), Text.assemble(("○ add-on but not a member: ", PEACH), (", ".join(holders), FG))]
+        parts += [Text(""), Text.assemble(("○ add-on but not a member: ", ORANGE), (", ".join(holders), FG))]
     return Group(*parts)
 
 
@@ -343,7 +339,7 @@ def bundle_detail(reg: Registry, snap: Snapshot | None, name: str, names: Callab
     for gname in b.groups:
         e = reg.group(gname)
         exists = snap is None or snap.group(gname) is not None
-        g.add_row(Text("●" if exists else "○", style=GREEN if exists else PEACH), Text(gname, style=FG),
+        g.add_row(Text("●" if exists else "○", style=GREEN if exists else ORANGE), Text(gname, style=FG),
                   Text(e.purpose if e and e.purpose else "no purpose", style=SUB if e and e.purpose else DIM))
     parts += [g, Text(""), heading(f"PEOPLE  {len(people)}")]
     if people:

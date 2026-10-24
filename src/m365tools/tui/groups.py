@@ -54,7 +54,7 @@ from .groups_view import (
 )
 from .modals import ConfirmModal, PromptModal, TextModal, TypedConfirmModal
 from .sections.base import Empty
-from .theme import DIM, FG, GREEN, MAUVE, PEACH, SEVERITY_STYLE, SUB, YELLOW
+from .theme import ACCENT, DIM, FG, GREEN, ORANGE, SEVERITY_STYLE, SUB, YELLOW
 from .widgets import Activity, BarList, BarOption, HeaderBar, KeyBar, StepList, VimLog, VimScroll, VimTable
 
 if TYPE_CHECKING:
@@ -348,7 +348,7 @@ class GroupsScreen(GroupsOpsScreen):
         empty.display = not self.rows
         if not self.rows:
             if self.filter_text:
-                msg = Text.assemble(("Nothing matches ", SUB), (self.filter_text, f"bold {MAUVE}"), (".\n", SUB),
+                msg = Text.assemble(("Nothing matches ", SUB), (self.filter_text, f"bold {ACCENT}"), (".\n", SUB),
                                     ("/ changes the filter, esc clears it.", DIM))
             elif self.mode == "bundles":
                 msg = Text.assemble(("No bundles yet.\n", f"bold {FG}"),
@@ -365,7 +365,7 @@ class GroupsScreen(GroupsOpsScreen):
         t = Text(no_wrap=True)
         for i, (key, title) in enumerate(TABS, 1):
             if key == self.mode:
-                t.append_text(theme.pill(f"{i} {title} {counts[key]}", MAUVE))
+                t.append_text(theme.pill(f"{i} {title} {counts[key]}", ACCENT))
             else:
                 t.append_text(theme.chip(str(i))).append(f" {title}", style=FG)
             t.append(" ")
@@ -373,14 +373,14 @@ class GroupsScreen(GroupsOpsScreen):
         f = self.query_one("#gfilter", Static)
         f.display = bool(self.filter_text)
         if self.filter_text:
-            f.update(Text.assemble(("/ ", DIM), (self.filter_text, f"bold {MAUVE}"),
+            f.update(Text.assemble(("/ ", DIM), (self.filter_text, f"bold {ACCENT}"),
                                    (f"  {len(self.rows)} shown", SUB)))
 
     def _render_state(self) -> None:
         job = self.job
         name = job.registry_path.name if job is not None else "none"
         if self.error:
-            self.query_one("#gstate", Static).update(Text(self.error, style=PEACH))
+            self.query_one("#gstate", Static).update(Text(self.error, style=ORANGE))
             return
         self.query_one("#gstate", Static).update(state_ribbon(
             self.snap, self.registry, self.local_findings, origin=self.snap_origin, stale=self.snap_stale,
@@ -443,14 +443,14 @@ class GroupsScreen(GroupsOpsScreen):
                           else "only colleagues, no partners or test accounts"))
         steps.append(("todo" if snap is None else "doing" if unreg else "done", "m",
                       "Import your groups into the registry",
-                      f"{unreg} group(s) not in the registry yet" if unreg else
+                      f"{theme.plural(unreg, 'group')} not in the registry yet" if unreg else
                       (f"{len(reg.groups)} groups registered" if snap else "after the inventory")))
         steps.append(("todo" if not reg.groups else "doing" if lacking else "done", "e",
                       "Give every group a purpose and owner",
-                      f"{len(lacking)} group(s) still lack one: 1, a group, then e" if lacking else
+                      f"{theme.plural(len(lacking), 'group')} still lack one: 1, a group, then e" if lacking else
                       ("all groups explained" if reg.groups else "after the import")))
         steps.append(("done" if reg.bundles else "todo", "s", "Suggest bundles",
-                      f"{len(reg.bundles)} bundle(s): " + ", ".join(sorted(reg.bundles)) if reg.bundles
+                      f"{theme.plural(len(reg.bundles), 'bundle')}: " + ", ".join(sorted(reg.bundles)) if reg.bundles
                       else "role packages from who has what today"))
         steps.append(("todo" if snap is None else "doing" if warn else "done", "d", "Check drift weekly",
                       f"{warn} warn · {info} info" if snap else "after the inventory"))
@@ -462,7 +462,7 @@ class GroupsScreen(GroupsOpsScreen):
             g.append(f"{gl} ", style=color).append(f"{i + 1}  ", style=DIM).append_text(theme.chip(key))
             g.append(f" {title}\n", style=f"bold {FG}" if i == nxt else FG)
             g.append(f"         {detail}\n", style=SUB)
-        head = Text.assemble(("Get started", f"bold {MAUVE}"), ("   ", ""),
+        head = Text.assemble(("Get started", f"bold {ACCENT}"), ("   ", ""),
                              (f"{sum(1 for st in steps if st[0] == 'done')} of {len(steps)} done", SUB))
         parts: list[Any] = [head, Text(""), g]
         if nxt is not None:
@@ -490,7 +490,7 @@ class GroupsScreen(GroupsOpsScreen):
             else:
                 content = bundle_detail(self.registry, self.snap, key, self._names)
         except Exception as exc:  # noqa: BLE001 - shown in the pane
-            content = Text(f"{type(exc).__name__}: {exc}", style=PEACH)
+            content = Text(f"{type(exc).__name__}: {exc}", style=ORANGE)
         if self.snap is None and kind != "b":
             content = Group(content, Text(""), Text("No snapshot yet: only the registry side is shown. "
                                                     "Press i to run an inventory.", style=YELLOW))
@@ -722,7 +722,7 @@ class GroupsScreen(GroupsOpsScreen):
         sug = self.suggestion
         n_near = sum(1 for m in sug.near if m.candidate)
         self.query_one("#suggest-head", Static).update(Text.assemble(
-            theme.pill(f"{len(sug.candidates)} candidates", MAUVE), ("  ", ""),
+            theme.pill(f"{len(sug.candidates)} candidates", ACCENT), ("  ", ""),
             (f"{n_near} people close to one", SUB), ("   a ", f"bold {theme.BLUE}"),
             ("accepts the highlighted candidate", SUB)))
         table = self.query_one("#suggest-table", VimTable)
@@ -731,7 +731,7 @@ class GroupsScreen(GroupsOpsScreen):
             table.add_row(Text(c.key, style=DIM), Text(c.name, style=f"bold {FG}"), Text(str(len(c.people)),
                                                                                            style=FG),
                           Text(", ".join(c.groups), style=SUB, no_wrap=True, overflow="ellipsis"),
-                          Text(c.existing or "new", style=theme.GREEN if c.existing else PEACH), key=c.key)
+                          Text(c.existing or "new", style=theme.GREEN if c.existing else ORANGE), key=c.key)
         self._render_candidate()
 
     def _current_candidate(self) -> Any:
@@ -854,7 +854,7 @@ class GroupsScreen(GroupsOpsScreen):
                                notes=Text("Creates registry groups that do not exist in the tenant yet, and fills "
                                           "in group ids in the registry.", style=SUB),
                                pending=None if plan.empty else (
-                                   "apply", f"Create {len(plan.create)} group(s) in the tenant?",
+                                   "apply", f"Create {theme.plural(len(plan.create), 'group')} in the tenant?",
                                    lambda job: job.sync(apply=True),
                                    lambda p: self._show_changes("Sync: done", _sync_rows(p, True)))
                                )
@@ -868,7 +868,7 @@ class GroupsScreen(GroupsOpsScreen):
                                notes=Text("Adds prefix groups that exist in the tenant but not in the registry. "
                                           "Fill in purpose and owner afterwards with e.", style=SUB),
                                pending=None if not entries else (
-                                   "apply", f"Add {len(entries)} group(s) to the registry?",
+                                   "apply", f"Add {theme.plural(len(entries), 'group')} to the registry?",
                                    lambda job: job.import_(apply=True),
                                    lambda es: self._show_changes("Import: done", [
                                        ("add to registry", e.name, f"kind {e.kind}", "done") for e in es])))

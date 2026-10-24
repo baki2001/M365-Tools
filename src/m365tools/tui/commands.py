@@ -21,6 +21,7 @@ class M365Commands(Provider):
             ("Open onboard", partial(app.open_tool, "onboard"), "bring people in and out"),
             ("Home", app.action_go_home, "the toolbox home screen  (g)"),
             ("Sign in", app.action_login, "log in / refresh the token for a tenant  (ctrl+l)"),
+            ("Theme", app.action_pick_theme, "pick a colour theme, saved to the config file  (ctrl+t)"),
             ("Open runs folder", app.action_open_runs_dir, "show and copy the runs folder path"),
             ("Quit", app.action_quit_app, "(q)"),
         ]

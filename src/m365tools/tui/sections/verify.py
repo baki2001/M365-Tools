@@ -15,7 +15,7 @@ from m365tools.tools.spmig.models import CompareResult
 
 from .. import theme
 from ..modals import PromptModal
-from ..theme import FG, MAUVE, SUB, VERIFY_LABEL, VERIFY_STYLE
+from ..theme import FG, SUB, VERIFY_LABEL, VERIFY_STYLE
 from ..widgets import Activity, VimTable
 from .base import Empty, Section
 
@@ -86,11 +86,9 @@ class VerifySection(Section):
         if res is None:
             return
         counts = res.counts()
-        line = theme.counts_line({k: counts.get(k, 0) for k in STATUSES}, VERIFY_STYLE, VERIFY_LABEL)
-        flt = VERIFY_LABEL.get(self.status_filter or "", self.status_filter or "all")
-        line.append(" f ", style=SUB).append(flt, style=f"bold {MAUVE}")
-        if self.filter_text:
-            line.append("  / ", style=SUB).append(self.filter_text, style=f"bold {MAUVE}")
+        line = theme.facets(theme.counts_line({k: counts.get(k, 0) for k in STATUSES}, VERIFY_STYLE, VERIFY_LABEL),
+                            [("f", VERIFY_LABEL.get(self.status_filter or "", self.status_filter or "all")),
+                             ("/", self.filter_text)])
         words = self.filter_text.lower().split()
         flt = self.status_filter
         rows = [r for r in res.rows

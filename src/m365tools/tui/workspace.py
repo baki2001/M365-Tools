@@ -276,4 +276,4 @@ def help_group(title: str, rows: list[tuple[str, str]]) -> Group:
     t.add_column(style=FG)
     for key, desc in rows:
         t.add_row(theme.chip(key), desc)
-    return Group(Text(title, style=f"bold {theme.MAUVE}"), t)
+    return Group(Text(title, style=f"bold {theme.ACCENT}"), t)

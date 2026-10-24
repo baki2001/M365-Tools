@@ -30,7 +30,7 @@ from m365tools.core.events import AuthPrompt
 from m365tools.tools.spmig.models import JobOptions
 
 from . import theme
-from .theme import BLUE, CRUST, DIM, FG, KEY, MAUVE, RED, SUB, YELLOW
+from .theme import ACCENT, BLUE, DIM, FG, KEY, ON_FILL, RED, SUB, YELLOW
 from .widgets import BarList, BarOption, VimScroll
 
 
@@ -177,11 +177,14 @@ class Choice:
     label: str
     value: Any
     detail: str = ""
+    extra: Text | None = None  # shown after the detail as is (the theme picker's colour swatches)
 
     def prompt(self, selected: bool = False) -> Text:
-        t = Text(self.label, style=f"bold {CRUST if selected else FG}")
+        t = Text(self.label, style=f"bold {ON_FILL if selected else FG}")
         if self.detail:
-            t.append("  ").append(self.detail, style=CRUST if selected else SUB)
+            t.append("  ").append(self.detail, style=ON_FILL if selected else SUB)
+        if self.extra is not None:
+            t.append("  ").append_text(self.extra)
         return t
 
 
@@ -203,6 +206,7 @@ class PickerModal(Dialog):
       ``loader``   fetched once when the picker opens (e.g. libraries), then filtered locally;
       ``search``   called with the typed text after ``DEBOUNCE_S`` of no typing (e.g. SharePoint site search).
     ``accept_text`` turns typed text into a value when nothing in the list matches (e.g. a pasted URL).
+    ``on_highlight`` is called with the value under the bar whenever it moves (live previews).
     """
 
     DEBOUNCE_S = 0.3
@@ -217,7 +221,8 @@ class PickerModal(Dialog):
 
     def __init__(self, title: str, choices: list[Choice] | None = None, *, loader: ChoiceLoader | None = None,
                  search: ChoiceSearch | None = None, accept_text: Callable[[str], Any] | None = None,
-                 placeholder: str = "type to filter", note: str = "", highlight: Any = None) -> None:
+                 placeholder: str = "type to filter", note: str = "", highlight: Any = None,
+                 on_highlight: Callable[[Any], None] | None = None) -> None:
         super().__init__(title, _hint(("type", "filter"), ("↑↓", "move"), ("enter", "pick"), ("esc", "cancel")))
         self.all_choices = list(choices or [])
         self.shown: list[Choice] = []
@@ -227,6 +232,7 @@ class PickerModal(Dialog):
         self.placeholder = placeholder
         self.note = note
         self.highlight_value = highlight
+        self.on_highlight = on_highlight
         self._timer: Timer | None = None
 
     def compose(self) -> ComposeResult:
@@ -281,7 +287,7 @@ class PickerModal(Dialog):
         if choices:
             idx = next((i for i, c in enumerate(choices) if c.value == self.highlight_value), 0)
             ol.highlighted = idx
-            self._status(f"{len(choices)} result(s)", SUB)
+            self._status(theme.plural(len(choices), "result"), SUB)
         else:
             self._status(empty, YELLOW)
 
@@ -313,6 +319,11 @@ class PickerModal(Dialog):
                 self.dismiss(value)
                 return
         self._status("nothing to pick: type to search, or esc to cancel", YELLOW)
+
+    @on(OptionList.OptionHighlighted)
+    def _highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if self.on_highlight is not None and 0 <= event.option_index < len(self.shown):
+            self.on_highlight(self.shown[event.option_index].value)
 
     @on(OptionList.OptionSelected)
     def _clicked(self, event: OptionList.OptionSelected) -> None:
@@ -383,7 +394,7 @@ class OptionsModal(Dialog):
         def maker(key: str) -> Any:
             def make(selected: bool) -> Text:
                 if selected:
-                    return Text.assemble((f"{labels[key]:<20}", CRUST), (values[key], f"bold {CRUST}"))
+                    return Text.assemble((f"{labels[key]:<20}", ON_FILL), (values[key], f"bold {ON_FILL}"))
                 return Text.assemble((f"{labels[key]:<20}", SUB), (values[key], f"bold {BLUE}"))
             return make
 
@@ -498,7 +509,7 @@ def auth_text(ev: AuthPrompt) -> Text:
     if ev.url:
         t.append("\n\nurl   ", style=SUB).append(ev.url, style=f"bold underline {BLUE}")
     if ev.code:
-        t.append("\ncode  ", style=SUB).append_text(theme.pill(ev.code, MAUVE))
+        t.append("\ncode  ", style=SUB).append_text(theme.pill(ev.code, ACCENT))
         t.append("\n\n").append_text(theme.key_hint("c", "copies the code"))
     return t
 

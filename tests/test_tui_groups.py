@@ -70,7 +70,7 @@ async def test_home_lists_tools_and_opens_both(tmp_path):
         await pilot.press("1")
         await pilot.pause()
         assert isinstance(app.screen, Workspace)
-        assert "▸ spmig" in screen_text(app.screen.query_one("#header"))
+        assert "● spmig" in screen_text(app.screen.query_one("#header"))
         await pilot.press("g")
         await pilot.pause()
         assert isinstance(app.screen, HomeScreen)
@@ -78,7 +78,7 @@ async def test_home_lists_tools_and_opens_both(tmp_path):
         await pilot.press("j", "enter")  # highlight groups, open it
         await settle(app, pilot)
         assert isinstance(app.screen, GroupsScreen)
-        assert "▸ groups" in screen_text(app.screen.query_one("#header"))
+        assert "● groups" in screen_text(app.screen.query_one("#header"))
         await pilot.press("g")
         await pilot.pause()
         assert isinstance(app.screen, HomeScreen)
@@ -310,7 +310,7 @@ async def test_get_started_checklist_follows_state(tmp_path):
         await inventory(app, pilot)
         assert step(app, 1).startswith("●") and "snapshot just now" in step(app, 1)
         assert step(app, 2).startswith("◐") and "12 people" in step(app, 2)
-        assert step(app, 3).startswith("◐") and "1 group(s)" in step(app, 3)
+        assert step(app, 3).startswith("◐") and "1 group not" in step(app, 3)
         assert step(app, 4).startswith("◐")
         assert step(app, 5).startswith("●")  # the sample registry has bundles
         # import: no unregistered groups left

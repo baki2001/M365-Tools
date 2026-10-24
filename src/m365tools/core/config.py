@@ -88,9 +88,17 @@ class ProfileConfig(_Model):
     name: str = ""
 
 
+class UiConfig(_Model):
+    """How the TUI looks. ``theme`` is a theme name from ``m365tools.tui.theme.PALETTES``; unknown names fall back
+    to the default theme."""
+
+    theme: str = "catppuccin-mocha"
+
+
 class AppConfig(_Model):
     tenants: dict[str, TenantConfig] = Field(default_factory=dict)
     profiles: dict[str, ProfileConfig] = Field(default_factory=dict)
+    ui: UiConfig = Field(default_factory=UiConfig)
     path: Path | None = Field(default=None, exclude=True)
 
     def model_post_init(self, context: Any, /) -> None:
@@ -131,6 +139,8 @@ def _dump(cfg: AppConfig) -> dict[str, Any]:
         t.pop("name", None)
     for prof in data.get("profiles", {}).values():
         prof.pop("name", None)
+    if data.get("ui") == UiConfig().model_dump(mode="json"):
+        del data["ui"]  # keep the file to what the user changed
     return data
 
 
