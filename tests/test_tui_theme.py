@@ -13,6 +13,7 @@ from textual.color import Color
 
 from m365tools.core.config import load_config, save_config
 from m365tools.tui import theme
+from m365tools.tui.app import detect_truecolor
 from m365tools.tui.modals import PickerModal
 
 from .test_tui import make_app, make_cfg
@@ -91,3 +92,15 @@ async def test_picker_previews_reverts_on_esc_and_saves_on_enter(tmp_path: Path)
         await pilot.pause()
         assert app.theme == "nord"
         assert load_config(app.cfg.path).ui.theme == "nord"
+
+
+def test_windows_terminal_gets_truecolor_unless_colorterm_is_set():
+    env = {"WT_SESSION": "abc", "TERM": "xterm-256color"}
+    detect_truecolor(env)
+    assert env["COLORTERM"] == "truecolor"
+    env = {"WT_SESSION": "abc", "COLORTERM": "256"}
+    detect_truecolor(env)
+    assert env["COLORTERM"] == "256"
+    env = {"TERM": "xterm-256color"}
+    detect_truecolor(env)
+    assert "COLORTERM" not in env
