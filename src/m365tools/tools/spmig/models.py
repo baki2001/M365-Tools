@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal
@@ -14,6 +14,18 @@ OFFICE_EXTENSIONS: frozenset[str] = frozenset(
 )
 MAX_PATH_LEN = 400
 PATH_WARN_LEN = 260
+# SharePoint date columns accept 1-1-1900 .. 31-12-8900; a day of margin on both ends for time zone shifts.
+SP_MIN_DATE = datetime(1900, 1, 2, tzinfo=UTC)
+SP_MAX_DATE = datetime(8900, 12, 30, tzinfo=UTC)
+
+
+def sp_date_ok(dt: datetime | None) -> bool:
+    """True when SharePoint can store ``dt`` (naive values are taken as UTC)."""
+    if dt is None:
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return SP_MIN_DATE <= dt <= SP_MAX_DATE
 
 
 class Severity(StrEnum):

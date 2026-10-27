@@ -8,13 +8,17 @@ but take no client argument: a gateway is bound to one ``SpClient`` and one site
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import tempfile
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from m365tools.core.errors import AccessDeniedError, NotFoundError
+from m365tools.core.errors import AccessDeniedError, M365Error, NotFoundError
 
 from .models import Endpoint, Item, LibraryRef
 
@@ -26,6 +30,12 @@ class UserNotFoundError(NotFoundError):
 @dataclass(slots=True)
 class UploadResult:
     unique_id: str | None
+    item_id: int | None
+
+
+@dataclass(slots=True)
+class FileInfo:
+    size: int
     item_id: int | None
 
 
@@ -70,6 +80,7 @@ class SpGateway(Protocol):
     async def upload_file(
         self, folder_server_relative_url: str, name: str, src_path: Path, overwrite: bool = True
     ) -> UploadResult: ...
+    async def get_file_info(self, server_relative_url: str) -> FileInfo | None: ...
     async def set_item_metadata(
         self,
         lib: LibraryRef,
@@ -79,6 +90,7 @@ class SpGateway(Protocol):
         author_email: str | None,
         editor_email: str | None,
     ) -> None: ...
+    async def probe_metadata(self, lib: LibraryRef, folder_url: str) -> str | None: ...
     async def get_site_usage(self) -> tuple[int, int]: ...
     async def probe_write_access(self, folder_url: str) -> None: ...
     async def get_role_assignments(self, lib: LibraryRef) -> list[RoleAssignment]: ...
@@ -121,6 +133,8 @@ class RestGateway:
     def __init__(self, client: Any, site_url: str) -> None:
         self.client = client
         self.site_url = site_url.rstrip("/")
+        self._date_formats: list[Callable[[datetime], str]] | None = None
+        self._date_lock = asyncio.Lock()
 
     @staticmethod
     def _sp() -> Any:
@@ -169,6 +183,27 @@ class RestGateway:
                 iid = _get(laf, "Id", "ID") if laf is not None else None
         return UploadResult(unique_id=str(uid) if uid else None, item_id=int(iid) if iid is not None else None)
 
+    async def get_file_info(self, server_relative_url: str) -> FileInfo | None:
+        info = await self._sp().get_file_info(self.client, self.site_url, server_relative_url)
+        if not info:
+            return None
+        iid = _get(info, "ItemId", "item_id")
+        return FileInfo(size=int(_get(info, "Length", "size", default=0) or 0),
+                        item_id=int(iid) if iid is not None else None)
+
+    async def _formats(self) -> list[Callable[[datetime], str]]:
+        """Date formatters to try, best first: the web's regional format with seconds, then without seconds.
+        Falls back to ISO-8601 when the regional settings cannot be read."""
+        async with self._date_lock:
+            if self._date_formats is None:
+                sp = self._sp()
+                try:
+                    rs = await sp.get_regional_settings(self.client, self.site_url)
+                    self._date_formats = [sp.date_formatter(rs), sp.date_formatter(rs, seconds=False)]
+                except Exception:  # noqa: BLE001 - ISO is still worth a try
+                    self._date_formats = [sp.format_sp_datetime]
+            return self._date_formats
+
     async def set_item_metadata(
         self,
         lib: LibraryRef,
@@ -178,14 +213,57 @@ class RestGateway:
         author_email: str | None,
         editor_email: str | None,
     ) -> None:
+        formats = await self._formats()
+        for i, fmt in enumerate(formats):
+            try:
+                await self._sp().set_item_metadata(
+                    self.client, lib, item_id, created, modified, author_email, editor_email, date_format=fmt
+                )
+            except Exception as exc:
+                if _is_user_not_found(exc) and not isinstance(exc, UserNotFoundError):
+                    raise UserNotFoundError(str(exc)) from exc
+                if type(exc).__name__ == "InvalidDateError" and i + 1 < len(formats):
+                    continue
+                raise
+            if i:  # a later format worked: use it straight away from now on
+                self._date_formats = formats[i:]
+            return
+
+    async def probe_metadata(self, lib: LibraryRef, folder_url: str) -> str | None:
+        """Upload a tiny test file, set known dates on it, read them back and delete it.
+
+        Returns None when the dates came back as sent, or a warning when they came back shifted (time zone).
+        Raises when they could not be set at all."""
+        sent_created = datetime(2001, 2, 3, 4, 5, 6, tzinfo=UTC)
+        sent_modified = datetime(2002, 7, 8, 9, 10, 11, tzinfo=UTC)
+        name = f"__m365_probe_{uuid.uuid4().hex}.txt"
+        tmp = Path(tempfile.gettempdir()) / name
+        tmp.write_bytes(b"probe")
+        url = f"{folder_url.rstrip('/')}/{name}"
         try:
-            await self._sp().set_item_metadata(
-                self.client, lib, item_id, created, modified, author_email, editor_email
-            )
-        except Exception as exc:
-            if _is_user_not_found(exc) and not isinstance(exc, UserNotFoundError):
-                raise UserNotFoundError(str(exc)) from exc
-            raise
+            res = await self.upload_file(folder_url, name, tmp, overwrite=True)
+            item_id = res.item_id
+            if item_id is None:
+                info = await self.get_file_info(url)
+                item_id = info.item_id if info else None
+            if item_id is None:
+                raise M365Error("the uploaded test file has no list item id")
+            await self.set_item_metadata(lib, item_id, sent_created, sent_modified, None, None)
+            got_created, got_modified = await self._sp().get_item_dates(self.client, lib, item_id)
+        finally:
+            tmp.unlink(missing_ok=True)
+            with contextlib.suppress(Exception):
+                await self._sp().delete_file(self.client, self.site_url, url)
+        problems = []
+        for what, sent, got in (("Created", sent_created, got_created), ("Modified", sent_modified, got_modified)):
+            if got is None:
+                problems.append(f"{what} could not be read back")
+                continue
+            diff = (got - sent).total_seconds()
+            if abs(diff) >= 60:
+                problems.append(f"{what} came back as {got:%Y-%m-%d %H:%M:%S} UTC instead of "
+                                f"{sent:%Y-%m-%d %H:%M:%S} UTC ({diff / 3600:+.1f} h)")
+        return "; ".join(problems) or None
 
     async def get_site_usage(self) -> tuple[int, int]:
         used, quota = await self._sp().get_site_usage(self.client, self.site_url)

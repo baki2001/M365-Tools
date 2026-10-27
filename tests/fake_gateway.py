@@ -11,7 +11,14 @@ from pathlib import Path
 from typing import Any
 
 from m365tools.core.errors import AccessDeniedError, NotFoundError, ValidationError
-from m365tools.tools.spmig.gateway import FieldInfo, RoleAssignment, SiteUser, UploadResult, UserNotFoundError
+from m365tools.tools.spmig.gateway import (
+    FieldInfo,
+    FileInfo,
+    RoleAssignment,
+    SiteUser,
+    UploadResult,
+    UserNotFoundError,
+)
 from m365tools.tools.spmig.models import Endpoint, Item, LibraryRef
 
 _ids = itertools.count(1)
@@ -60,6 +67,8 @@ class FakeGateway:
         self.download_failures: dict[str, list[BaseException]] = {}
         self.break_count = 0
         self.reader_set: list[int] = []
+        self.metadata_error: Exception | None = None  # raised by set_item_metadata (after the user check)
+        self.probe_result: str | Exception | None = None  # what probe_metadata returns (or raises)
 
     # ---------------------------------------------------------------- setup helpers
 
@@ -210,6 +219,22 @@ class FakeGateway:
                                 author_email="migrator@contoso.com", editor_email="migrator@contoso.com")
         return UploadResult(unique_id=f"uid-{e.id}", item_id=e.id)
 
+    async def get_file_info(self, server_relative_url: str) -> FileInfo | None:
+        self.calls.append(("get_file_info", server_relative_url))
+        try:
+            e = self._lib_for_url(server_relative_url).entries.get(server_relative_url.lower())
+        except NotFoundError:
+            return None
+        if e is None or e.is_folder:
+            return None
+        return FileInfo(size=len(e.content), item_id=e.id)
+
+    async def probe_metadata(self, lib: LibraryRef, folder_url: str) -> str | None:
+        self.calls.append(("probe_metadata", folder_url))
+        if isinstance(self.probe_result, Exception):
+            raise self.probe_result
+        return self.probe_result
+
     async def set_item_metadata(self, lib: LibraryRef, item_id: int, created: datetime | None,
                                 modified: datetime | None, author_email: str | None,
                                 editor_email: str | None) -> None:
@@ -217,6 +242,8 @@ class FakeGateway:
         for email in (author_email, editor_email):
             if email and email.lower() not in self.users:
                 raise UserNotFoundError(f"user {email} not found")
+        if self.metadata_error is not None:
+            raise self.metadata_error
         e = next(x for x in self.libraries[lib.title].entries.values() if x.id == item_id)
         e.metadata_calls += 1
         if created:

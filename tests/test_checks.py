@@ -1,5 +1,6 @@
 from datetime import datetime
 
+from m365tools.core.errors import M365Error
 from m365tools.core.events import CollectingSink
 from m365tools.tools.spmig.checks import (
     CHECKS,
@@ -8,10 +9,12 @@ from m365tools.tools.spmig.checks import (
     check_checked_out,
     check_columns,
     check_conflicts,
+    check_dates,
     check_destination_library,
     check_duration,
     check_large_files,
     check_library_settings,
+    check_metadata,
     check_onenote,
     check_paths,
     check_quota,
@@ -227,3 +230,28 @@ async def test_run_checks_all_have_fix_and_survive_crash():
     assert f[0].severity == Severity.BLOCKING  # sorted by severity
     assert any(x.category == "check_failed" for x in f)
     assert all(x.fix for x in f)
+
+
+async def test_metadata_probe():
+    ctx = await make_ctx()
+    assert await check_metadata(ctx) == []
+    assert ("probe_metadata", "/sites/dst/Gedeelde documenten") in ctx.dst_gw.calls
+
+    ctx.dst_gw.probe_result = M365Error("Created: U moet een geldige datum opgeven")
+    f = await check_metadata(ctx)
+    assert [x.severity for x in f] == [Severity.BLOCKING] and "geldige datum" in f[0].detail
+
+    ctx.dst_gw.probe_result = "Modified came back as ... (+1.0 h)"
+    assert sev(await check_metadata(ctx), "metadata") == [Severity.WARN]
+
+    assert await check_metadata(await make_ctx(restore_metadata=False)) == []
+
+
+async def test_out_of_range_dates_are_reported():
+    def setup(src):
+        src.add_file("ok.txt")
+        src.add_file("old.txt", created=datetime(1601, 1, 1))
+
+    f = await check_dates(await make_ctx(setup))
+    assert [(x.severity, x.path) for x in f] == [(Severity.WARN, "old.txt")]
+    assert "Created 1601-01-01" in f[0].detail

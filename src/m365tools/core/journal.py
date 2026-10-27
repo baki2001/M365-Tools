@@ -88,6 +88,16 @@ class Journal:
             (ok if e.get("ok") is True else failed).add(p)
         return failed - ok
 
+    def metadata_pending(self) -> set[str]:
+        """``rel_path`` values whose latest entry is a copy whose Created/Modified/Author/Editor could not be set
+        (``metadata_failed`` true): the file is at the destination but its metadata should be tried again."""
+        latest: dict[str, dict[str, Any]] = {}
+        for e in self.load():
+            p = e.get("rel_path", e.get("path"))
+            if isinstance(p, str):
+                latest[p] = e
+        return {p for p, e in latest.items() if e.get("ok") is True and e.get("metadata_failed") is True}
+
 
 class StatusWriter:
     """Merges status fields and writes ``status.json`` atomically, at most once per ``interval_s``."""

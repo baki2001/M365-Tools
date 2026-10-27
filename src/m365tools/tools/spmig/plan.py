@@ -9,7 +9,7 @@ Order of entries: folders (shallowest first), then files (by path). Decision per
 3. folder  - exists at destination -> SKIP, else CREATE_FOLDER
 4. file    - missing at destination -> COPY; exists ->
              ``never`` -> SKIP; ``always`` -> COPY;
-             ``skip_if_same_or_newer`` -> SKIP when dst.modified >= src.modified - 2 s, else CONFLICT
+             ``skip_if_same_or_newer`` -> SKIP when dst.modified >= src.modified - 60 s, else CONFLICT
              (the engine copies CONFLICT entries; they are reported separately).
 """
 
@@ -22,7 +22,7 @@ from typing import Any
 
 from .models import Action, Inventory, Item, JobOptions, LibraryRef, Plan, PlanEntry
 
-MTIME_TOLERANCE = timedelta(seconds=2)
+MTIME_TOLERANCE = timedelta(seconds=60)  # dates may be stored to the minute
 ROUTE_UNAVAILABLE = "route destination unavailable"
 
 

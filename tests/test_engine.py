@@ -1,9 +1,9 @@
 import asyncio
 from datetime import datetime
 
-from m365tools.core.errors import TransferError
+from m365tools.core.errors import M365Error, TransferError
 from m365tools.core.events import CollectingSink, ItemDone, LogLine, Stats
-from m365tools.tools.spmig.engine import Migrator
+from m365tools.tools.spmig.engine import METADATA_GIVE_UP, Migrator, safe_dates
 from m365tools.tools.spmig.inventory import build_inventory
 from m365tools.tools.spmig.models import Endpoint, JobOptions
 from m365tools.tools.spmig.plan import build_plan
@@ -222,6 +222,88 @@ async def test_previously_failed_file_retried_even_if_plan_skips(tmp_path):
     summary = await m.run()
     assert summary.copied == 1 and summary.skipped == 0
     assert dst.file("Klanten/Sub/f0.pdf").modified == T
+    # Same size at the destination: the earlier upload is reused, only the metadata is set.
+    assert not [c for c in dst.calls if c[0] == "upload_file"] and summary.bytes_copied == 0
+
+
+async def test_previously_failed_file_uploaded_again_when_size_differs(tmp_path):
+    src, dst = gateways(1)
+    dst.add_file("Klanten/Sub/f0.pdf", b"", modified=datetime(2026, 10, 21, 10, 0, 0))  # interrupted upload
+    m = await make(src, dst, tmp_path, journal=FailingJournal(["Klanten/Sub/f0.pdf"]))
+    summary = await m.run()
+    assert summary.copied == 1 and [c for c in dst.calls if c[0] == "upload_file"]
+    assert dst.file("Klanten/Sub/f0.pdf").content == b"content-0"
+
+
+class MetaJournal(MemJournal):
+    def metadata_pending(self):
+        latest = {e["rel_path"]: e for e in self.entries}
+        return {p for p, e in latest.items() if e["ok"] and e.get("metadata_failed")}
+
+
+async def test_metadata_failure_keeps_the_copy_and_warns(tmp_path):
+    src, dst = gateways(2)
+    dst.metadata_error = M365Error("Metadata update of item 1 failed: Created: invalid date")
+    m = await make(src, dst, tmp_path, journal=MetaJournal())
+    summary = await m.run()
+    assert (summary.copied, summary.failed, summary.metadata_warnings) == (2, 0, 2)
+    assert summary.bytes_copied > 0
+    assert all(e["ok"] and e["metadata_failed"] for e in m.journal.entries)
+    assert all(e["message"].startswith("metadata: dates/authors not restored") for e in m.journal.entries)
+    rows = (tmp_path / "run" / "results.csv").read_text(encoding="utf-8-sig")
+    assert rows.count(";WARN;") == 2
+
+    # Resume after the cause is fixed: the files are not uploaded again, only their metadata is set.
+    dst.metadata_error = None
+    dst.calls.clear()
+    m2 = await make(src, dst, tmp_path, journal=m.journal)
+    summary = await m2.run()
+    assert (summary.copied, summary.metadata_warnings, summary.bytes_copied) == (2, 0, 0)
+    assert not [c for c in dst.calls if c[0] == "upload_file"]
+    assert all(dst.file(f"Klanten/Sub/f{i}.pdf").modified == T for i in range(2))
+    assert m2.journal.metadata_pending() == set()
+
+    # And a third run has nothing left to do.
+    summary = await (await make(src, dst, tmp_path, journal=m2.journal)).run()
+    assert summary.copied == 0
+
+
+async def test_stops_when_metadata_fails_on_every_file(tmp_path):
+    src, dst = gateways(METADATA_GIVE_UP + 10)
+    dst.metadata_error = M365Error("Created: U moet een geldige datum opgeven")
+    sink = CollectingSink()
+    summary = await (await make(src, dst, tmp_path, sink=sink, workers=1)).run()
+    assert summary.stopped_early and summary.copied == METADATA_GIVE_UP and summary.failed == 0
+    assert any(isinstance(e, LogLine) and "stopping so the rest" in e.text for e in sink.events)
+
+
+async def test_out_of_range_dates_are_replaced(tmp_path):
+    src, dst = gateways(0)
+    src.add_file("a.txt", b"a", created=datetime(1601, 1, 1), modified=T)
+    src.add_file("b.txt", b"b", created=datetime(1601, 1, 1), modified=datetime(1601, 1, 1))
+    summary = await (await make(src, dst, tmp_path)).run()
+    assert (summary.copied, summary.failed, summary.metadata_warnings) == (2, 0, 2)
+    a, b = dst.file("a.txt"), dst.file("b.txt")
+    assert a.created == T and a.modified == T
+    assert b.created.year == 2026  # nothing usable: the upload time stays
+
+
+def test_safe_dates():
+    assert safe_dates(T, T) == (T, T, "")
+    assert safe_dates(None, T) == (None, T, "")
+    c, m, note = safe_dates(T, datetime(9999, 12, 31))
+    assert (c, m) == (T, T) and "Modified 9999-12-31" in note and "other date" in note
+    c, m, note = safe_dates(datetime(1, 1, 1), datetime(1899, 12, 31))
+    assert (c, m) == (None, None) and "upload time" in note
+
+
+async def test_step_timing_is_logged_and_journaled(tmp_path):
+    src, dst = gateways(2)
+    sink = CollectingSink()
+    m = await make(src, dst, tmp_path, sink=sink)
+    await m.run()
+    assert all(set(e["steps"]) == {"download", "upload", "metadata"} for e in m.journal.entries)
+    assert any(isinstance(e, LogLine) and e.text.startswith("time per step:") for e in sink.events)
 
 
 async def test_worker_exception_cancels_other_workers(tmp_path):

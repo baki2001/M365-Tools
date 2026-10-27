@@ -172,9 +172,14 @@ All async; first argument is the client; site-scoped calls take `site_url` as th
   `StartUpload/ContinueUpload/FinishUpload` in 10 MB chunks (`CancelUpload` on failure). Returns
   `{"UniqueId","ServerRelativeUrl","Length","ItemId"}`; `ItemId` comes from `ListItemAllFields?$select=Id`.
 - `set_item_metadata(client, lib, item_id, created, modified, author_email, editor_email, *, date_format)` via
-  `ValidateUpdateListItem` with `bNewDocumentUpdate=true` (no new version). Dates are ISO-8601 `...Z`
-  (`format_sp_datetime`); users as `[{"Key":"i:0#.f|membership|<email>"}]`. Raises `core.sharepoint.UserNotFoundError`
-  for a rejected Author/Editor, `M365Error` for other field errors.
+  `ValidateUpdateListItem` with `bNewDocumentUpdate=true` (no new version). ValidateUpdateListItem parses date
+  text with the web's locale, so `RestGateway` reads `web/RegionalSettings` (+ `/TimeZone`) once and formats dates
+  with `date_formatter(rs)`: local time in the web's time zone, e.g. `31-1-2024 11:00:05` (nl-NL) or
+  `1/31/2024 11:00:05 AM` (en-US). If the seconds are rejected it retries without them and keeps that format; if
+  the regional settings cannot be read it uses ISO-8601 `...Z` (`format_sp_datetime`). Users as
+  `[{"Key":"i:0#.f|membership|<email>"}]`. Raises `core.sharepoint.UserNotFoundError` for a rejected
+  Author/Editor, `InvalidDateError` when only Created/Modified are rejected, `M365Error` for other field errors.
+- `get_file_info(client, site_url, url) -> {"Length","ItemId"} | None`, `delete_file`, `get_item_dates(lib, id)`.
 - `get_site_usage(client, site_url) -> (used, quota|None)` from `/_api/site/Usage`: quota = `Storage / StoragePercentageUsed`
   (fraction 0..1).
 - `probe_write_access(client, site_url, folder) -> bool`: creates then deletes `__m365_probe_<uuid>` (POST with
@@ -212,7 +217,7 @@ Entries are ordered folders (shallowest first) then files. Per item, in this ord
 2. **Excludes**: any glob in `opts.excludes` -> `EXCLUDED`.
 3. Folder: exists at destination -> `SKIP`, else `CREATE_FOLDER` (a route root folder is `SKIP`).
 4. File: missing -> `COPY`; exists -> `never` = `SKIP`, `always` = `COPY`, `skip_if_same_or_newer` = `SKIP` when
-   `dst.modified >= src.modified - 2 s`, else `CONFLICT` (a folder where a file should go is also `CONFLICT`; so is an empty
+   `dst.modified >= src.modified - 60 s`, else `CONFLICT` (a folder where a file should go is also `CONFLICT`; so is an empty
    destination file for a non-empty source, the leftover of an interrupted chunked upload). Naive datetimes count as UTC.
    The engine copies `CONFLICT` entries; they are reported as warnings.
 
@@ -226,6 +231,7 @@ case-insensitive too.
 |---|---|
 | destination library resolvable (`destination`) | BLOCKING |
 | write access probe on destination folder (`write_access`) | BLOCKING |
+| metadata probe: set dates on a test file, read them back (`metadata`; only with restore_metadata) | BLOCKING if rejected, WARN if shifted |
 | quota: dst free >= src total * 1.1 (`quota`; INFO when usage/quota is unknown) | BLOCKING |
 | target path > 400 chars (`path_length`), illegal chars, leading/trailing space, trailing dot, `~$` names, reserved names (`.lock`, `CON`, `desktop.ini`, ...) or `_vti_` (`illegal_name`); a leading dot is allowed | BLOCKING per item |
 | draw.io backups `.$*.bkp` that will be copied (`temp_files`; suggests the exclude `**/.$*.bkp`) | INFO |
@@ -237,6 +243,7 @@ case-insensitive too.
 | conflicts (`conflict`) | WARN |
 | OneNote notebooks (`onenote`) | WARN |
 | files >= 100 MB (`large_file`) | INFO |
+| Created/Modified outside 1900..8900 (`dates`) | WARN |
 | library settings differ (`library_settings`) | INFO |
 | estimated duration (`duration`) | INFO |
 
@@ -253,9 +260,15 @@ takes no arguments and returns a `RunSummary`. `route_targets` maps route prefix
 - Per file: download to `run_dir/tmp/<uuid>` -> `upload_file(overwrite=True)` -> `set_item_metadata` (author/editor mapped
   through the `UserMap`) -> journal line -> delete tmp. The journal is written after the metadata step.
 - Metadata: `UserNotFoundError` -> retry with dates only, count a metadata warning (result `WARN`), the file is still OK.
+  Dates SharePoint cannot store (before 1900, after 8900) are replaced by the other date, or left out. Any other
+  `M365Error` from the metadata step is a metadata warning too: the file is uploaded, so it counts as copied and the
+  journal line gets `metadata_failed: true`. If the first 25 files all fail their metadata step the run stops.
+- Each journal line has `steps` (seconds per step); finalize logs the share of time per step.
 - Resume: `journal.done_paths()` (case-insensitive) are skipped. Files with only failed journal entries
   (`Journal.failed_paths()`) are copied again even when the re-built plan says `SKIP` (an upload whose metadata step
-  failed looks "newer" at the destination). Dry run never touches the journal or destination.
+  failed looks "newer" at the destination), and so are files whose latest line has `metadata_failed`
+  (`Journal.metadata_pending()`). For both, when the destination already has the file with the same size
+  (`get_file_info`), the upload is skipped and only the metadata is set. Dry run never touches the journal or destination.
 - Folder-creation failures count in `failed`. SIGINT is handed back to the previous handler after the run.
 - Retry: `SpClient` handles HTTP retries; for non-`M365Error` exceptions the engine retries the whole file `retries` times.
 - Watchdog: a file running longer than `max(15 min, 5 x size / max(0.2 MB/s, measured rate))` emits one `LogLine("warn")`.
@@ -343,6 +356,8 @@ on screen without rebuilding any widget. Never put a literal colour in TUI code;
 
 - Default library name is language-dependent ("Gedeelde documenten"); always resolve via DefaultDocumentLibrary.
 - Deleted users (`gone.user@contoso.com`) fail metadata set → fall back to dates only, count as warning, never fail the file.
+- ISO dates in ValidateUpdateListItem are rejected on a Dutch site ("U moet een geldige datum opgeven binnen het
+  bereik van 1-1-1900 tot 31-12-8900"): write dates in the web's regional format and time zone, probe it in the audit.
 - Office files change size on upload (SharePoint injects metadata) → verify ignores size for Office extensions.
 - Throttling is real at ~0.5–1 MB/s single-stream; show "throttled, waiting Ns" rather than looking stuck.
 - Lock must only downgrade principals that hold Edit/Add/Delete/ManageLists; "Limited Access" entries untouched.

@@ -23,10 +23,11 @@ import re
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 from urllib.parse import quote, urlencode, urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
@@ -43,6 +44,8 @@ __all__ = [
     "SMALL_UPLOAD_LIMIT",
     "WRITE_MASK",
     "FieldInfo",
+    "InvalidDateError",
+    "RegionalSettings",
     "RoleAssignment",
     "SiteHit",
     "SiteUser",
@@ -50,6 +53,8 @@ __all__ = [
     "WebInfo",
     "break_inheritance",
     "build_item",
+    "date_formatter",
+    "delete_file",
     "download_file",
     "ensure_folder",
     "ensure_user",
@@ -58,7 +63,10 @@ __all__ = [
     "get_associated_owner_group_id",
     "get_default_library",
     "get_fields",
+    "get_file_info",
+    "get_item_dates",
     "get_library",
+    "get_regional_settings",
     "get_role_assignments",
     "get_site_usage",
     "get_web",
@@ -208,6 +216,24 @@ class UserNotFoundError(M365Error):
         self.message = message
 
 
+class InvalidDateError(M365Error):
+    """ValidateUpdateListItem rejected Created/Modified (text not in the format it expects, or out of range)."""
+
+
+@dataclass(slots=True)
+class RegionalSettings:
+    """The parts of a web's regional settings needed to write dates the way ValidateUpdateListItem parses them."""
+
+    date_order: int = 1  # SP.RegionalSettings.DateFormat: 0 = M/D/Y, 1 = D/M/Y, 2 = Y/M/D
+    date_separator: str = "-"
+    time_separator: str = ":"
+    time24: bool = True
+    am: str = "AM"
+    pm: str = "PM"
+    time_zone: str = ""  # SP.TimeZone.Description, e.g. "(UTC+01:00) Amsterdam, Berlin, Bern, Rome, ..."
+    bias_minutes: int = 0  # SP.TimeZoneInformation.Bias: UTC = local time + bias
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # URL / response helpers
 # ---------------------------------------------------------------------------------------------------------------
@@ -326,6 +352,73 @@ def format_sp_datetime(dt: datetime) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
     return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# SharePoint only exposes the Windows time zone description; map its cities to IANA names so daylight saving is
+# applied per date. Anything not listed falls back to the zone's standard offset (Bias).
+_TZ_BY_CITY: tuple[tuple[str, str], ...] = (
+    ("Amsterdam", "Europe/Amsterdam"), ("Brussels", "Europe/Brussels"), ("Dublin", "Europe/London"),
+    ("Belgrade", "Europe/Belgrade"), ("Sarajevo", "Europe/Sarajevo"), ("Athens", "Europe/Athens"),
+    ("Helsinki", "Europe/Helsinki"), ("Istanbul", "Europe/Istanbul"), ("Moscow", "Europe/Moscow"),
+    ("Casablanca", "Africa/Casablanca"), ("Cairo", "Africa/Cairo"), ("Harare", "Africa/Johannesburg"),
+    ("Jerusalem", "Asia/Jerusalem"), ("Abu Dhabi", "Asia/Dubai"), ("New Delhi", "Asia/Kolkata"),
+    ("Beijing", "Asia/Shanghai"), ("Kuala Lumpur", "Asia/Singapore"), ("Osaka", "Asia/Tokyo"),
+    ("Brisbane", "Australia/Brisbane"), ("Canberra", "Australia/Sydney"), ("Perth", "Australia/Perth"),
+    ("Auckland", "Pacific/Auckland"), ("Pacific Time", "America/Los_Angeles"), ("Mountain Time", "America/Denver"),
+    ("Central Time", "America/Chicago"), ("Eastern Time", "America/New_York"), ("Atlantic Time", "America/Halifax"),
+    ("Coordinated Universal Time", "UTC"),
+)
+
+
+async def get_regional_settings(client: _SpClientLike, site_url: str) -> RegionalSettings:
+    rs = _unwrap(await client.get_json(_api(site_url, "web/RegionalSettings")))
+    tz = _unwrap(await client.get_json(_api(site_url, "web/RegionalSettings/TimeZone")))
+    info = tz.get("Information") or {}
+    return RegionalSettings(
+        date_order=_int(rs.get("DateFormat"), 1),
+        date_separator=rs.get("DateSeparator") or "-",
+        time_separator=rs.get("TimeSeparator") or ":",
+        time24=_bool(rs.get("Time24")),
+        am=rs.get("AM") or "AM",
+        pm=rs.get("PM") or "PM",
+        time_zone=tz.get("Description") or "",
+        bias_minutes=_int(info.get("Bias") if isinstance(info, dict) else None),
+    )
+
+
+def site_time_zone(rs: RegionalSettings) -> tzinfo:
+    for city, name in _TZ_BY_CITY:
+        if city in rs.time_zone:
+            try:
+                return ZoneInfo(name)
+            except ZoneInfoNotFoundError:  # Windows without the tzdata package
+                break
+    return timezone(timedelta(minutes=-rs.bias_minutes))
+
+
+def date_formatter(rs: RegionalSettings, *, seconds: bool = True) -> Callable[[datetime], str]:
+    """A ``date_format`` for :func:`set_item_metadata` that writes dates the way the web's regional settings
+    read them, in the web's time zone: '31-1-2024 11:00:00' for nl-NL, '1/31/2024 11:00:00 AM' for en-US.
+
+    ValidateUpdateListItem parses date text with the web's locale; ISO-8601 is rejected on e.g. Dutch sites
+    ("U moet een geldige datum opgeven binnen het bereik van 1-1-1900 tot 31-12-8900")."""
+    tz = site_time_zone(rs)
+
+    def fmt(dt: datetime) -> str:
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        t = dt.astimezone(tz)
+        d, m, y = str(t.day), str(t.month), f"{t.year:04d}"
+        parts = {0: (m, d, y), 2: (y, m, d)}.get(rs.date_order, (d, m, y))
+        sep = rs.time_separator
+        hour = t.hour if rs.time24 else (t.hour % 12 or 12)
+        clock = f"{hour:02d}" if rs.time24 else str(hour)
+        clock += f"{sep}{t.minute:02d}" + (f"{sep}{t.second:02d}" if seconds else "")
+        if not rs.time24:
+            clock += " " + (rs.am if t.hour < 12 else rs.pm)
+        return f"{rs.date_separator.join(parts)} {clock}"
+
+    return fmt
 
 
 def _body(resp: Any) -> dict:
@@ -712,6 +805,34 @@ async def _file_item_id(client: _SpClientLike, site_url: str, server_relative_ur
     return _int(v) if v is not None else None
 
 
+async def get_file_info(client: _SpClientLike, site_url: str, server_relative_url: str) -> dict[str, Any] | None:
+    """``{"Length", "ItemId"}`` of an existing file, or None when there is no file at that URL."""
+    url = _url(_file_path(site_url, server_relative_url),
+               {"$select": "Exists,Length,ListItemAllFields/Id", "$expand": "ListItemAllFields"})
+    try:
+        data = _unwrap(await client.get_json(url))
+    except NotFoundError:
+        return None
+    if not _bool(data.get("Exists", True)):
+        return None
+    laf = data.get("ListItemAllFields") or {}
+    iid = laf.get("Id", laf.get("ID")) if isinstance(laf, dict) else None
+    return {"Length": _int(data.get("Length")), "ItemId": _int(iid) if iid is not None else None}
+
+
+async def delete_file(client: _SpClientLike, site_url: str, server_relative_url: str) -> None:
+    await client.request("POST", _file_path(site_url, server_relative_url),
+                         headers={"X-HTTP-Method": "DELETE", "IF-MATCH": "*", "Accept": NOMETA})
+
+
+async def get_item_dates(client: _SpClientLike, lib: LibraryRef, item_id: int) -> tuple[datetime | None, datetime | None]:
+    """(Created, Modified) of a list item as aware UTC datetimes."""
+    data = _unwrap(await client.get_json(
+        _url(_api(lib.site_url, _list_path(lib, f"items({int(item_id)})")), {"$select": "Created,Modified"})
+    ))
+    return _parse_dt(data.get("Created")), _parse_dt(data.get("Modified"))
+
+
 def _read_chunk(path: Path, offset: int, size: int) -> bytes:
     with path.open("rb") as fh:
         fh.seek(offset)
@@ -811,8 +932,8 @@ async def set_item_metadata(
     bNewDocumentUpdate=true). Only non-None values are sent.
 
     Raises UserNotFoundError when Author or Editor is rejected (deleted/unknown user) — the caller should retry
-    with dates only and count a metadata warning. Raises M365Error for other per-field errors. Returns the
-    per-field result list.
+    with dates only and count a metadata warning. Raises InvalidDateError when only Created/Modified are rejected
+    and M365Error for other per-field errors. Returns the per-field result list.
     """
     form: list[dict[str, str]] = []
     if created is not None:
@@ -841,6 +962,8 @@ async def set_item_metadata(
             raise UserNotFoundError(fname, emails[fname], r.get("ErrorMessage") or "unknown error")
     if errors:
         detail = "; ".join(f"{r.get('FieldName')}: {r.get('ErrorMessage')}" for r in errors)
+        if all(r.get("FieldName") in ("Created", "Modified") for r in errors):
+            raise InvalidDateError(f"Metadata update of item {item_id} failed: {detail}")
         raise M365Error(f"Metadata update of item {item_id} failed: {detail}")
     return results
 

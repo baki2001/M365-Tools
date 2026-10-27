@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 from .models import CompareResult, CompareRow, Inventory
 
-MTIME_TOLERANCE = timedelta(seconds=2)
+MTIME_TOLERANCE = timedelta(seconds=60)  # dates may be stored to the minute
 
 
 def _aware(dt: datetime) -> datetime:
@@ -16,7 +16,7 @@ def _aware(dt: datetime) -> datetime:
 
 def compare(src: Inventory, dst: Inventory) -> CompareResult:
     """Per source item: ``missing`` / ``size_differs`` (never for Office files: SharePoint rewrites them on
-    upload) / ``source_newer`` (beyond 2 s) / ``ok``; plus ``only_in_destination`` rows."""
+    upload) / ``source_newer`` (beyond 60 s) / ``ok``; plus ``only_in_destination`` rows."""
     dst_idx = dst.index()
     src_keys: set[str] = set()
     rows: list[CompareRow] = []

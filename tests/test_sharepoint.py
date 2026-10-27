@@ -305,6 +305,61 @@ async def test_set_item_metadata_user_not_found(fake_client, respx_mock: respx.M
         "formValues"]
 
 
+NL = sp.RegionalSettings(date_order=1, date_separator="-", time_separator=":", time24=True,
+                         time_zone="(UTC+01:00) Amsterdam, Berlin, Bern, Rome, Stockholm, Vienna", bias_minutes=-60)
+US = sp.RegionalSettings(date_order=0, date_separator="/", time_separator=":", time24=False, am="AM", pm="PM",
+                         time_zone="(UTC-08:00) Pacific Time (US and Canada)", bias_minutes=480)
+
+
+def test_date_formatter_uses_site_locale_and_time_zone() -> None:
+    nl = sp.date_formatter(NL)
+    assert nl(datetime(2024, 1, 31, 10, 0, 5, tzinfo=UTC)) == "31-1-2024 11:00:05"  # CET
+    assert nl(datetime(2024, 7, 1, 10, 0, 0, tzinfo=UTC)) == "1-7-2024 12:00:00"  # CEST
+    assert nl(datetime(2024, 7, 1, 10, 0, 0)) == "1-7-2024 12:00:00"  # naive = UTC
+    assert sp.date_formatter(NL, seconds=False)(datetime(2024, 1, 31, 10, 0, 5, tzinfo=UTC)) == "31-1-2024 11:00"
+    us = sp.date_formatter(US)
+    assert us(datetime(2024, 1, 31, 20, 5, 6, tzinfo=UTC)) == "1/31/2024 12:05:06 PM"
+    assert us(datetime(2024, 1, 31, 8, 5, 6, tzinfo=UTC)) == "1/31/2024 12:05:06 AM"
+    ymd = sp.RegionalSettings(date_order=2, date_separator=".", time_zone="(UTC+05:45) Kathmandu",
+                              bias_minutes=-345)
+    assert sp.date_formatter(ymd)(datetime(2024, 1, 31, 10, 0, tzinfo=UTC)) == "2024.1.31 15:45:00"
+
+
+async def test_get_regional_settings(fake_client, respx_mock: respx.MockRouter) -> None:
+    respx_mock.get(f"{SITE}/_api/web/RegionalSettings").respond(json={
+        "DateFormat": 1, "DateSeparator": "-", "TimeSeparator": ":", "Time24": True, "AM": "a.m.", "PM": "p.m.",
+        "LocaleId": 1043,
+    })
+    respx_mock.get(f"{SITE}/_api/web/RegionalSettings/TimeZone").respond(json={
+        "Description": "(UTC+01:00) Amsterdam, Berlin, Bern, Rome, Stockholm, Vienna", "Id": 4,
+        "Information": {"Bias": -60, "DaylightBias": -60, "StandardBias": 0},
+    })
+    rs = await sp.get_regional_settings(fake_client, SITE)
+    assert (rs.date_order, rs.date_separator, rs.time24, rs.bias_minutes) == (1, "-", True, -60)
+    assert "Amsterdam" in rs.time_zone
+
+
+async def test_set_item_metadata_invalid_date(fake_client, respx_mock: respx.MockRouter) -> None:
+    msg = "U moet een geldige datum opgeven binnen het bereik van 1-1-1900 tot 31-12-8900."
+    respx_mock.post(f"{LIST_API}/items(5)/ValidateUpdateListItem").respond(json=_vul([
+        {"FieldName": "Created", "ErrorMessage": msg, "HasException": True},
+        {"FieldName": "Modified", "ErrorMessage": msg, "HasException": True},
+    ]))
+    with pytest.raises(sp.InvalidDateError, match="geldige datum"):
+        await sp.set_item_metadata(fake_client, lib(), 5, created=datetime(2024, 1, 31, tzinfo=UTC),
+                                   modified=datetime(2024, 1, 31, tzinfo=UTC), date_format=sp.date_formatter(NL))
+
+
+async def test_get_file_info(fake_client, respx_mock: respx.MockRouter) -> None:
+    url = f"{LIB_ROOT}/a.txt"
+    respx_mock.get(url__startswith=f"{SITE}/_api/web/GetFileByServerRelativePath").mock(side_effect=[
+        httpx.Response(200, json={"Exists": True, "Length": "12", "ListItemAllFields": {"Id": 7}}),
+        httpx.Response(404, json={"error": {"message": {"value": "File Not Found."}}}),
+    ])
+    assert await sp.get_file_info(fake_client, SITE, url) == {"Length": 12, "ItemId": 7}
+    assert await sp.get_file_info(fake_client, SITE, url) is None
+
+
 # ------------------------------------------------------------------------------------------------ permissions
 
 FULL = {"Id": 1073741829, "Name": "Full Control", "RoleTypeKind": 5,
