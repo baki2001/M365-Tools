@@ -67,3 +67,13 @@ def test_journal_failed_paths(tmp_path: Path) -> None:
     j.append({"rel_path": "b.pdf", "ok": False})
     j.append({"rel_path": "b.pdf", "ok": True})
     assert j.failed_paths() == {"a.pdf"}
+
+
+def test_journal_metadata_pending(tmp_path: Path) -> None:
+    j = Journal(tmp_path / "journal.jsonl")
+    j.append({"rel_path": "a", "ok": True, "metadata_failed": True})
+    j.append({"rel_path": "b", "ok": True, "metadata_failed": True})
+    j.append({"rel_path": "b", "ok": True})  # fixed in a later leg
+    j.append({"rel_path": "c", "ok": True})
+    j.append({"rel_path": "d", "ok": False})
+    assert j.metadata_pending() == {"a"}

@@ -71,3 +71,76 @@ async def test_rest_gateway_signatures(calls):
     assert (await gw.get_fields(lib))[0].type_name == "Text"
     assert (await gw.find_site_user("jan@x.nl")).email == "jan@x.nl"
     assert len(set(calls)) == 14
+
+
+async def test_rest_gateway_dates_use_regional_format_and_fall_back_to_minutes(monkeypatch):
+    rs = sp.RegionalSettings(date_order=1, date_separator="-", time_zone="(UTC+01:00) Amsterdam, Berlin",
+                             bias_minutes=-60)
+    sent: list[str] = []
+
+    async def regional(client, site_url):
+        return rs
+
+    async def set_meta(client, lib, item_id, created, modified, author, editor, *, date_format):
+        text = date_format(created)
+        sent.append(text)
+        if text.count(":") == 2:  # this site only takes dates to the minute
+            raise sp.InvalidDateError("Created: invalid")
+
+    monkeypatch.setattr(sp, "get_regional_settings", regional)
+    monkeypatch.setattr(sp, "set_item_metadata", set_meta)
+    gw = RestGateway(object(), "https://c.sharepoint.com/sites/a")
+    when = datetime(2024, 1, 31, 10, 0, 5)
+    await gw.set_item_metadata(make_lib(), 1, when, when, None, None)
+    await gw.set_item_metadata(make_lib(), 2, when, when, None, None)
+    assert sent == ["31-1-2024 11:00:05", "31-1-2024 11:00", "31-1-2024 11:00"]
+
+
+async def test_rest_gateway_dates_fall_back_to_iso_without_regional_settings(monkeypatch):
+    sent: list[str] = []
+
+    async def regional(client, site_url):
+        raise RuntimeError("no access")
+
+    async def set_meta(client, lib, item_id, created, modified, author, editor, *, date_format):
+        sent.append(date_format(created))
+        raise sp.InvalidDateError("Created: invalid")
+
+    monkeypatch.setattr(sp, "get_regional_settings", regional)
+    monkeypatch.setattr(sp, "set_item_metadata", set_meta)
+    gw = RestGateway(object(), "https://c.sharepoint.com/sites/a")
+    with pytest.raises(sp.InvalidDateError):
+        await gw.set_item_metadata(make_lib(), 1, datetime(2024, 1, 31, 10, 0, 5), None, None, None)
+    assert sent == ["2024-01-31T10:00:05Z"]
+
+
+async def test_rest_gateway_probe_metadata(monkeypatch):
+    from datetime import UTC, timedelta
+
+    got: dict[str, object] = {}
+    shift = timedelta(0)
+
+    async def upload(client, site_url, folder, name, src_path, overwrite):
+        got["name"] = name
+        return {"ItemId": 9}
+
+    async def set_meta(client, lib, item_id, created, modified, author, editor, *, date_format):
+        got["dates"] = (created, modified)
+
+    async def dates(client, lib, item_id):
+        c, m = got["dates"]
+        return c + shift, m + shift
+
+    async def delete(client, site_url, url):
+        got["deleted"] = url
+
+    monkeypatch.setattr(sp, "upload_file", upload)
+    monkeypatch.setattr(sp, "set_item_metadata", set_meta)
+    monkeypatch.setattr(sp, "get_item_dates", dates)
+    monkeypatch.setattr(sp, "delete_file", delete)
+    gw = RestGateway(object(), "https://c.sharepoint.com/sites/a")
+    assert await gw.probe_metadata(make_lib(), "/sites/a/Docs") is None
+    assert got["deleted"] == f"/sites/a/Docs/{got['name']}"
+    assert got["dates"][0].tzinfo is UTC
+    shift = timedelta(hours=1)
+    assert "+1.0 h" in await gw.probe_metadata(make_lib(), "/sites/a/Docs")

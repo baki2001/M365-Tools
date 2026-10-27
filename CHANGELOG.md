@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- spmig: dates are written the way the destination site reads them. SharePoint parses the Created and Modified
+  text with the site's regional settings, so on a Dutch site every ISO date was refused ("U moet een geldige
+  datum opgeven binnen het bereik van 1-1-1900 tot 31-12-8900") and every file counted as failed. Dates now go
+  out in the site's own format and time zone (`31-1-2024 11:00:05` for nl-NL).
+- spmig: a file whose metadata step fails after a good upload counts as copied, with a metadata warning. Resume
+  sets the metadata again without uploading the file a second time, also for files that failed this way
+  before this change. If the first 25 files all fail their metadata step, the run stops.
+- spmig audit: a new `metadata` check sets dates on a test file at the destination and reads them back, so a
+  date problem shows up before the copy starts. A `dates` check lists files with dates SharePoint cannot store
+  (before 1900 or after 8900); the migration uses the other date for those.
+- spmig: the journal records seconds per step (download, upload, metadata) and the run log ends with the share
+  of time each step took. Modified dates within a minute count as equal, since some sites keep dates to the
+  minute.
+
 - Windows Terminal and WSL: themes now get 24-bit colour. Windows Terminal does not set `COLORTERM`, so
   the TUI fell back to 256 colours and every background turned black. It now sets `COLORTERM=truecolor` when
   `WT_SESSION` is present and `COLORTERM` is empty.

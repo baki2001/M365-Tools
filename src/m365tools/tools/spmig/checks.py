@@ -1,7 +1,8 @@
 """Pre-flight checks. Each rule is an async ``(CheckContext) -> list[Finding]`` registered in :data:`CHECKS`.
 
-Severities follow the table in docs/ARCHITECTURE.md. Rules never write anything except the write-access probe,
-which creates and deletes one ``__m365_probe_<uuid>`` folder at the destination.
+Severities follow the table in docs/ARCHITECTURE.md. Rules never write anything except two probes at the
+destination: the write-access probe creates and deletes one ``__m365_probe_<uuid>`` folder, and the metadata
+probe uploads one ``__m365_probe_<uuid>.txt``, sets its dates, reads them back and deletes it.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from m365tools.core.errors import AccessDeniedError, NotFoundError
+from m365tools.core.errors import AccessDeniedError, M365Error, NotFoundError
 from m365tools.core.events import EventSink, LogLine, PhaseChanged, Stats, null_sink
 
 from .gateway import SpGateway
@@ -26,6 +27,7 @@ from .models import (
     LibraryRef,
     Plan,
     Severity,
+    sp_date_ok,
 )
 from .plan import ROUTE_UNAVAILABLE, glob_match, is_excluded
 from .usermap import ResolvedUsers, UserMap, collect_users
@@ -172,6 +174,50 @@ async def check_write_access(ctx: CheckContext) -> list[Finding]:
             "sign in again.",
         )]
     return []
+
+
+async def check_metadata(ctx: CheckContext) -> list[Finding]:
+    """Set dates on a test file at the destination and read them back: catches a date format or time zone the
+    site does not accept before hours of copying (every file would otherwise end up without its dates)."""
+    if ctx.dst_lib is None or ctx.dst_gw is None or not ctx.opts.restore_metadata:
+        return []
+    folder = ctx.dst_base or ctx.dst_lib.root_server_relative_url
+    try:
+        try:
+            problem = await ctx.dst_gw.probe_metadata(ctx.dst_lib, folder)
+        except NotFoundError:
+            folder = ctx.dst_lib.root_server_relative_url
+            problem = await ctx.dst_gw.probe_metadata(ctx.dst_lib, folder)
+    except AccessDeniedError:
+        return []  # reported by check_write_access
+    except M365Error as exc:
+        return [Finding(
+            Severity.BLOCKING, "metadata", folder,
+            f"Created/Modified could not be set on a test file at the destination: {exc}",
+            "Copied files would keep the upload date and the migrating account. Report this, or turn off "
+            "'restore metadata' in the job to copy without the original dates and authors.",
+        )]
+    if problem:
+        return [Finding(
+            Severity.WARN, "metadata", folder,
+            f"Dates on a test file at the destination came back different: {problem}.",
+            "Check the destination site's time zone (Site settings > Regional settings).",
+        )]
+    return []
+
+
+async def check_dates(ctx: CheckContext) -> list[Finding]:
+    out: list[Finding] = []
+    for i in ctx.migrating_files():
+        bad = [f"{n} {d:%Y-%m-%d}" for n, d in (("Created", i.created), ("Modified", i.modified))
+               if d is not None and not sp_date_ok(d)]
+        if bad:
+            out.append(Finding(
+                Severity.WARN, "dates", i.rel_path,
+                f"{', '.join(bad)} is outside what SharePoint can store (1900-8900).",
+                "No action needed: the other date (or the upload time) is used instead.",
+            ))
+    return out
 
 
 async def check_quota(ctx: CheckContext) -> list[Finding]:
@@ -440,6 +486,7 @@ async def check_duration(ctx: CheckContext) -> list[Finding]:
 CHECKS: list[Check] = [
     check_destination_library,
     check_write_access,
+    check_metadata,
     check_quota,
     check_paths,
     check_temp_files,
@@ -451,6 +498,7 @@ CHECKS: list[Check] = [
     check_conflicts,
     check_onenote,
     check_large_files,
+    check_dates,
     check_library_settings,
     check_duration,
 ]

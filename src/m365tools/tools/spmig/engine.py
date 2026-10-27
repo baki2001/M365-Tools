@@ -1,6 +1,8 @@
 """Migration engine: executes a :class:`Plan` (folders -> files -> finalize).
 
-Per file: download to ``run_dir/tmp/<uuid>`` -> upload -> metadata -> journal line -> delete tmp.
+Per file: download to ``run_dir/tmp/<uuid>`` -> upload -> metadata -> journal line -> delete tmp. A file that is
+already at the destination from an earlier leg of the same run (its metadata step failed) is not uploaded again:
+only its metadata is set.
 Resumable through the journal, stoppable (SIGINT / :meth:`Migrator.request_stop`), watched by a watchdog that
 warns about files that take suspiciously long. All SharePoint access goes through :class:`SpGateway`.
 """
@@ -15,6 +17,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -32,12 +35,15 @@ from m365tools.core.events import (
     null_sink,
 )
 
-from .gateway import SpGateway, UserNotFoundError
-from .models import Action, JobOptions, LibraryRef, Plan, PlanEntry, RunSummary
+from .gateway import SpGateway, UploadResult, UserNotFoundError
+from .models import Action, Item, JobOptions, LibraryRef, Plan, PlanEntry, RunSummary, sp_date_ok
 from .usermap import UserMap
 
 MB = 1024 * 1024
 RESULTS_COLUMNS = ["time", "result", "path", "size_mb", "seconds", "message"]
+# Metadata failed on this many files in a row with not one success: something is wrong for every file (date
+# format, permissions), so stop instead of copying the whole library without its dates.
+METADATA_GIVE_UP = 25
 
 
 class JournalLike(Protocol):
@@ -47,6 +53,31 @@ class JournalLike(Protocol):
 
 class StatusLike(Protocol):
     def update(self, *, force: bool = False, **fields: Any) -> None: ...
+
+
+@dataclass(slots=True)
+class _Outcome:
+    message: str = ""  # "" or a metadata warning prefixed "metadata:"
+    uploaded: bool = True  # False when an upload from an earlier leg was reused
+    metadata_failed: bool = False  # metadata not restored: retried on resume without uploading again
+    steps: dict[str, float] = field(default_factory=dict)  # seconds per step
+
+
+def safe_dates(
+    created: datetime | None, modified: datetime | None
+) -> tuple[datetime | None, datetime | None, str]:
+    """Replace dates SharePoint cannot store (before 1900 or after 8900) by the other date, or drop them so the
+    upload time stays. Returns (created, modified, note); the note is "" when nothing was changed."""
+    bad = [n for n, d in (("Created", created), ("Modified", modified)) if d is not None and not sp_date_ok(d)]
+    if not bad:
+        return created, modified, ""
+    c_ok, m_ok = sp_date_ok(created), sp_date_ok(modified)
+    c = created if c_ok else (modified if m_ok else None)
+    m = modified if m_ok else (created if c_ok else None)
+    raw = ", ".join(f"{n} {d:%Y-%m-%d}" for n, d in (("Created", created), ("Modified", modified))
+                    if n in bad and d is not None)
+    used = "the other date" if c is not None else "the upload time"
+    return c, m, f"{raw} out of range for SharePoint; used {used}"
 
 
 def write_results_csv(path: Path, rows: list[dict[str, Any]], append: bool = False) -> None:
@@ -119,6 +150,10 @@ class Migrator:
         self.failed = 0
         self.metadata_warnings = 0
         self.bytes_copied = 0
+        self.metadata_ok = 0
+        self.metadata_errors = 0
+        self._reuse: set[str] = set()  # lower rel paths that may already be at the destination
+        self._step_seconds: dict[str, float] = {}
 
     # ------------------------------------------------------------------------------------------- control
 
@@ -288,23 +323,34 @@ class Migrator:
         failed_fn = getattr(self.journal, "failed_paths", None)
         if failed_fn is not None and not self.dry_run:
             failed_before = {p.lower() for p in failed_fn()} - done_paths
+        # Copied in an earlier leg, but Created/Modified/Author/Editor could not be set: set them now (no upload).
+        meta_again: set[str] = set()
+        meta_fn = getattr(self.journal, "metadata_pending", None)
+        if meta_fn is not None and not self.dry_run and self.opts.restore_metadata:
+            meta_again = {p.lower() for p in meta_fn()}
         todo: list[PlanEntry] = []
         for e in self.plan.entries:
             if e.item.is_folder:
                 continue
-            if e.action == Action.SKIP and e.item.rel_path.lower() in failed_before:
-                self.sink(LogLine("info", f"{e.item.rel_path}: failed in an earlier run; copying again"))
+            key = e.item.rel_path.lower()
+            if e.action == Action.SKIP and (key in failed_before or key in meta_again):
+                self._reuse.add(key)
                 todo.append(e)
             elif e.action == Action.SKIP:
                 self.skipped += 1
                 self._result("SKIPPED", e.item.rel_path, e.item.size, 0.0, e.reason)
             elif e.action in (Action.COPY, Action.CONFLICT):
-                if e.item.rel_path.lower() in done_paths:
+                if key in done_paths and key not in meta_again:
                     self.skipped += 1
                     self.sink(ItemDone(e.item.rel_path, True, 0.0, "already done (journal)", skipped=True))
                     self._result("SKIPPED", e.item.rel_path, e.item.size, 0.0, "already done (journal)")
                 else:
+                    if key in meta_again:
+                        self._reuse.add(key)
                     todo.append(e)
+        if self._reuse:
+            self.sink(LogLine("info", f"{len(self._reuse)} file(s) failed or missed their metadata in an earlier run: "
+                                      "trying them again (no new upload when the destination already has them)"))
         self.total = len(todo)
         self.bytes_total = sum(e.item.size for e in todo)
         resumed = f", {len(done_paths)} already done" if done_paths else ""
@@ -348,6 +394,7 @@ class Migrator:
         self.sink(ItemStarted(rel, item.size, index, self.total))
         ok = False
         message = ""
+        outcome = _Outcome(uploaded=False)
         try:
             if self.dry_run:
                 ok, message = True, "would copy" + (f" ({entry.reason})" if entry.action == Action.CONFLICT else "")
@@ -355,7 +402,8 @@ class Migrator:
                 attempt = 0
                 while True:
                     try:
-                        message = await self._copy_one(entry)
+                        outcome = await self._copy_one(entry)
+                        message = outcome.message
                         ok = True
                         break
                     except asyncio.CancelledError:
@@ -379,14 +427,21 @@ class Migrator:
         self.bytes_done += item.size
         if ok:
             self.copied += 1
-            if not self.dry_run:
+            if not self.dry_run and outcome.uploaded:
                 self.bytes_copied += item.size
         else:
             self.failed += 1
             self.sink(LogLine("error", f"{rel}: {message}"))
+        for step, secs in outcome.steps.items():
+            self._step_seconds[step] = self._step_seconds.get(step, 0.0) + secs
         if self.journal is not None and not self.dry_run:
-            self.journal.append({"rel_path": rel, "ok": ok, "bytes": item.size, "seconds": round(seconds, 2),
-                                 "message": message})
+            record: dict[str, Any] = {"rel_path": rel, "ok": ok, "bytes": item.size, "seconds": round(seconds, 2),
+                                      "message": message}
+            if outcome.metadata_failed:
+                record["metadata_failed"] = True
+            if outcome.steps:
+                record["steps"] = {k: round(v, 2) for k, v in outcome.steps.items()}
+            self.journal.append(record)
         result = "DRYRUN" if self.dry_run else ("OK" if ok else "FAILED")
         if ok and message.startswith("metadata:"):
             result = "WARN"
@@ -395,39 +450,85 @@ class Migrator:
         self.sink(self._stats())
         self._status()
 
-    async def _copy_one(self, entry: PlanEntry) -> str:
-        """Copy one file. Returns "" or a metadata warning message (prefixed ``metadata:``)."""
+    async def _copy_one(self, entry: PlanEntry) -> _Outcome:
+        """Copy one file: download, upload, metadata. A failed metadata step does not fail the file (it is at the
+        destination); it becomes a warning and is tried again on resume."""
         item = entry.item
         rel = item.rel_path
         gw, lib = self._target(entry)
         tmp = self.tmp_dir / uuid.uuid4().hex
+        out = _Outcome()
+        t = self.clock()
+
+        def lap(step: str) -> None:
+            nonlocal t
+            now = self.clock()
+            out.steps[step] = out.steps.get(step, 0.0) + now - t
+            t = now
+
         try:
-            self._step(rel, "download")
-            await self.src_gw.download_file(item.server_relative_url, tmp)
-            self._step(rel, "upload")
-            folder, name = entry.target_server_relative_url.rsplit("/", 1)
-            res = await gw.upload_file(folder, name, tmp, overwrite=True)
+            res: UploadResult | None = None
+            if rel.lower() in self._reuse:
+                info = await gw.get_file_info(entry.target_server_relative_url)
+                lap("check")
+                if info is not None and info.size == item.size:
+                    res = UploadResult(unique_id=None, item_id=info.item_id)
+                    out.uploaded = False
+            if res is None:
+                self._step(rel, "download")
+                await self.src_gw.download_file(item.server_relative_url, tmp)
+                lap("download")
+                self._step(rel, "upload")
+                folder, name = entry.target_server_relative_url.rsplit("/", 1)
+                res = await gw.upload_file(folder, name, tmp, overwrite=True)
+                lap("upload")
             if not self.opts.restore_metadata:
-                return ""
+                return out
             self._step(rel, "metadata")
-            if res.item_id is None:
-                self.metadata_warnings += 1
-                msg = "metadata: upload returned no item id; dates/authors not restored"
-                self.sink(LogLine("warn", f"{rel}: {msg}"))
-                return msg
-            author = self._map_user(item.author_email)
-            editor = self._map_user(item.editor_email)
             try:
-                await gw.set_item_metadata(lib, res.item_id, item.created, item.modified, author, editor)
-            except UserNotFoundError as exc:
-                await gw.set_item_metadata(lib, res.item_id, item.created, item.modified, None, None)
-                self.metadata_warnings += 1
-                msg = f"metadata: dates only, user not found ({exc})"
-                self.sink(LogLine("warn", f"{rel}: {msg}"))
-                return msg
-            return ""
+                await self._metadata(rel, item, gw, lib, res.item_id, out)
+            finally:
+                lap("metadata")
+            return out
         finally:
             tmp.unlink(missing_ok=True)
+
+    def _metadata_warning(self, rel: str, out: _Outcome, text: str) -> None:
+        self.metadata_warnings += 1
+        out.message = f"metadata: {text}"
+        self.sink(LogLine("warn", f"{rel}: {out.message}"))
+
+    async def _metadata(
+        self, rel: str, item: Item, gw: SpGateway, lib: LibraryRef, item_id: int | None, out: _Outcome
+    ) -> None:
+        if item_id is None:
+            out.metadata_failed = True
+            self._metadata_warning(rel, out, "upload returned no item id; dates/authors not restored")
+            return
+        created, modified, fixed = safe_dates(item.created, item.modified)
+        author = self._map_user(item.author_email)
+        editor = self._map_user(item.editor_email)
+        try:
+            try:
+                await gw.set_item_metadata(lib, item_id, created, modified, author, editor)
+            except UserNotFoundError as exc:
+                await gw.set_item_metadata(lib, item_id, created, modified, None, None)
+                self.metadata_ok += 1
+                self._metadata_warning(rel, out, f"dates only, user not found ({exc})" + (f"; {fixed}" if fixed else ""))
+                return
+        except M365Error as exc:
+            self.metadata_errors += 1
+            out.metadata_failed = True
+            self._metadata_warning(rel, out, f"dates/authors not restored ({exc})")
+            if self.metadata_ok == 0 and self.metadata_errors == METADATA_GIVE_UP and not self.stopping:
+                self.sink(LogLine("error", f"metadata could not be set on the first {METADATA_GIVE_UP} files; "
+                                           "stopping so the rest of the library does not lose its dates too. "
+                                           "The copied files are kept and get their metadata on resume."))
+                self.request_stop()
+            return
+        self.metadata_ok += 1
+        if fixed:
+            self._metadata_warning(rel, out, fixed)
 
     async def _watchdog(self) -> None:
         while True:
@@ -458,6 +559,12 @@ class Migrator:
             self.sink(LogLine("error", f"could not write results.csv: {exc}"))
         self.sink(self._stats())
         self._status(force=True)
+        busy = sum(self._step_seconds.values())
+        if busy > 0 and not self.dry_run:
+            parts = ", ".join(f"{k} {v / busy:.0%}" for k, v in
+                              sorted(self._step_seconds.items(), key=lambda kv: -kv[1]))
+            per_file = busy / max(self.copied, 1)
+            self.sink(LogLine("info", f"time per step: {parts} ({per_file:.1f} s per file per worker)"))
         level = "warn" if self.failed or self.stopping else "ok"
         self.sink(LogLine(level, f"{'dry run' if self.dry_run else 'migration'} "
                                  f"{'stopped' if self.stopping else 'finished'}: {self.copied} copied, "
